@@ -1,0 +1,7 @@
+services:
+  app:
+    build: ./app
+    env_file:
+      - .env
+    volumes:
+      - ./service_account.json:/app/Data/config/service_account.json:ro

@@ -1,0 +1,18 @@
+{
+    "example_screen": {
+        "image_url": "https://example.com/welcome.jpg",
+        "text": "👋 Welcome to the bot! Choose an option:",
+        "buttons": [
+            ["Start", "Help"],
+            ["Settings"],
+            ["Exit"]
+        ],
+        "callbacks": {
+            "Start": "scr_start",
+            "Help": "scr_help",
+            "Settings": "scr_settings",
+            "Exit": "cmd_exit"
+        }
+    }
+
+}
