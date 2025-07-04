@@ -22,7 +22,7 @@ class GoogleDriveRepo:
             credentials_json_path, scopes=scopes)
         self.service = build('drive', 'v3', credentials=credentials)
 
-    def upload_file_from_bytes(self, file_bytes: bytes, filename: str, folder_id: str, mime_type: str):
+    def upload_file_from_bytes(self, file_bytes: bytes, filename: str, folder_id: str, encode: bool=False, mime_type: str='application/octet-stream'):
         """
         Upload a file directly from bytes with a given filename and MIME type.
 
@@ -35,9 +35,11 @@ class GoogleDriveRepo:
             'name': filename,
             'parents': [folder_id]
         }
-        file_stream = self.cryptography_repo.resize_and_optimize_if_image(file_bytes)
-        file_stream_encrypted = self.cryptography_repo.encrypt_file(file_stream)
-        media = MediaIoBaseUpload(file_stream_encrypted, mimetype=mime_type)
+        file_stream = self.cryptography_repo.resize_and_optimize_if_image(io.BytesIO(file_bytes))
+        if encode:
+            file_stream = self.cryptography_repo.encrypt_file(file_stream)
+
+        media = MediaIoBaseUpload(file_stream, mimetype=mime_type)
 
         file = self.service.files().create(
             body=file_metadata,
@@ -47,7 +49,7 @@ class GoogleDriveRepo:
 
         return file.get('id')
 
-    def download_file_to_bytes(self, file_id) -> bytes:
+    def download_file_to_bytes(self, file_id, decode: bool=False) -> bytes:
         """
         Downloads a file from Google Drive by its ID and returns bytes.
 
@@ -62,7 +64,33 @@ class GoogleDriveRepo:
             status, done = downloader.next_chunk()
         fh.seek(0)
 
-        data_encrypted = fh.read()
-        data = self.cryptography_repo.decrypt_file(data_encrypted)
-        
-        return data
+        data = io.BytesIO(fh.read())
+        if decode:
+            data = self.cryptography_repo.decrypt_file(io.BytesIO(data))
+
+        return data.getvalue()
+
+    def get_files_in_folder(self, folder_id: str) -> dict:
+        """
+        Get all files id's and names inside a specific Google Drive folder.
+
+        :param folder_id: ID of the Google Drive folder
+        """
+        # Find all files in the folder
+        query = f"'{folder_id}' in parents and trashed = false"
+        results = self.service.files().list(
+            q=query,
+            spaces='drive',
+            fields='files(id, name)',
+        ).execute()
+
+        files = results.get('files', [])
+
+        file_ids = {}
+        for file in files:
+            file_ids[file['name']] = file['id']
+
+        return file_ids
+    
+    def delete_file(self, file_id: str):
+        self.service.files().delete(fileId=file_id).execute()

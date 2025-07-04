@@ -1,2 +1,6 @@
-testvenv/
 *.env
+*.json
+*.db
+*.log
+
+testvenv/

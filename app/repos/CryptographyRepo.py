@@ -55,17 +55,20 @@ class CryptographyRepo:
         return out_io
     
     
-    def resize_and_optimize_if_image(self, input_bytes: bytes, max_size=1080, quality=90) -> io.BytesIO:
-        file = Image.open(io.BytesIO(input_bytes))
-
+    def resize_and_optimize_if_image(self, input_bytes: io.BytesIO, max_size=1080, quality=80) -> io.BytesIO:
         try:
-            file.verify() 
+            input_bytes.seek(0)
+            img = Image.open(input_bytes)
+            img.verify()
         except (UnidentifiedImageError, OSError):
-            return file
-        
-        img = file.convert('RGB')  # convert to RGB for JPEG
+            input_bytes.seek(0)
+            return input_bytes  # Not an image; return unchanged
 
-        # Calculate new size preserving aspect ratio
+        input_bytes.seek(0)
+        img = Image.open(input_bytes)
+        img = img.convert('RGB')
+
+        # Resize
         width, height = img.size
         if max(width, height) > max_size:
             if width > height:
@@ -77,12 +80,7 @@ class CryptographyRepo:
             img = img.resize((new_width, new_height), Image.LANCZOS)
 
         out_io = io.BytesIO()
-        img.save(
-            out_io,
-            format='JPEG',
-            quality=quality,          # controls compression, 85 is good default
-            optimize=True,            # optimize Huffman coding
-            progressive=True          # makes JPEG progressive
-        )
+        img.save(out_io, format='JPEG', quality=quality, optimize=True, progressive=True)
         out_io.seek(0)
         return out_io
+
