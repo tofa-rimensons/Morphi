@@ -18,7 +18,7 @@ class CryptographyRepo:
         return data.rstrip(b'\0')
 
     def derive_key(self, password: str, key_len: int = 16) -> bytes:
-        return PBKDF2(password, salt=bytes([0]), dkLen=key_len, count=1000)
+        return PBKDF2(password, salt=bytes([0]), dkLen=key_len, count=100)
 
     def encrypt_int(self, n: int) -> str:
         b = n.to_bytes(self.block_size, 'big')

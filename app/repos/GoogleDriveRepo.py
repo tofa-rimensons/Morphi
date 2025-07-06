@@ -20,7 +20,7 @@ class GoogleDriveRepo:
         scopes = ['https://www.googleapis.com/auth/drive']
         credentials = service_account.Credentials.from_service_account_file(
             credentials_json_path, scopes=scopes)
-        self.service = build('drive', 'v3', credentials=credentials)
+        self.service = build('drive', 'v3', credentials=credentials, cache_discovery=False)
 
     def upload_file_from_bytes(self, file_bytes: bytes, filename: str, folder_id: str, encode: bool=False, mime_type: str='application/octet-stream'):
         """

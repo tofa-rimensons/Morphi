@@ -1,18 +1,21 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, CallbackContext
+from telegram.ext import Updater, CommandHandler, PicklePersistence, CallbackQueryHandler, CallbackContext, ApplicationBuilder, MessageHandler, filters, ContextTypes
+import os
+import aiofiles
+import datetime
 import json
-from repos.CryptographyRepo import CryptographyRepo
 from repos.GoogleDriveRepo import GoogleDriveRepo
 from repos.DBRepo import DBRepo
+import logging
+
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("telegram.bot").setLevel(logging.WARNING)
 
 class ScreenManager:
-    def __init__(self, log):
-        self.log = log
 
-    def get_screen(self, name: str) -> dict:
-        return self.screens.get(name)
-
-    def build_keyboard(self, buttons: list, callbacks: dict) -> InlineKeyboardMarkup:
+    @staticmethod
+    def build_keyboard(buttons: list, callbacks: dict) -> InlineKeyboardMarkup:
         keyboard = []
         for row in buttons:
             keyboard_row = [
@@ -22,80 +25,338 @@ class ScreenManager:
             keyboard.append(keyboard_row)
         return InlineKeyboardMarkup(keyboard)
 
-    def send_screen(self, update, context, text, image_url: str=None, buttons: list=[], callbacks: dict={}):
 
+    @staticmethod
+    async def send_screen(
+        update, context,
+        text,
+        image_url: str = "",
+        buttons: list = [],
+        callbacks: dict = {},
+        edit_if_possible: bool = True,
+        screen_name: str = ''
+    ):
         chat_id = update.effective_chat.id
-
-        markup = self.build_keyboard(buttons, callbacks)
-
-        # Attempt to get the last message from the chat
+        markup = ScreenManager.build_keyboard(buttons, callbacks)
         last_message = update.effective_message
+        text = ScreenManager.escape_markdown(text)
 
-        # Check if the last message was sent by the bot
-        if last_message and last_message.from_user.id == context.bot.id:
-            try:
-                if image_url:
-                    # If there's an image, re-send the photo (editing photo is not supported by Telegram)
-                    context.bot.delete_message(chat_id=chat_id, message_id=last_message.message_id)
-                    context.bot.send_photo(chat_id=chat_id, photo=image_url, reply_markup=markup)
-                    context.bot.send_message(chat_id=chat_id, text=text, reply_markup=markup)
-                else:
-                    # Safe to edit just the text and buttons
-                    context.bot.edit_message_text(
+        if edit_if_possible and last_message and last_message.from_user.id == context.bot.id:
+            if (not image_url) and not getattr(last_message, 'photo', None):
+                try:
+                    await context.bot.edit_message_text(
                         chat_id=chat_id,
                         message_id=last_message.message_id,
                         text=text,
+                        parse_mode='MarkdownV2',
                         reply_markup=markup
                     )
-            except Exception as e:
-                self.log.warning(f"Failed to edit message: {e}")
-                # Fallback to sending a new message
-                if image_url:
-                    context.bot.send_photo(chat_id=chat_id, photo=image_url, reply_markup=markup)
-                context.bot.send_message(chat_id=chat_id, text=text, reply_markup=markup)
+                    # Store current screen info if needed
+                    if screen_name:
+                        context.user_data['current_screen'] = screen_name
+                    return
+                except Exception:
+                    pass  # fallback to sending new if edit fails
+
+        # Otherwise: send new
+        if image_url:
+            sent_message = await context.bot.send_photo(
+                chat_id=chat_id,
+                photo=image_url,
+                caption=text,
+                parse_mode='MarkdownV2',
+                reply_markup=markup
+            )
         else:
-            # Not a bot message or can't edit
-            if image_url:
-                context.bot.send_photo(chat_id=chat_id, photo=image_url, reply_markup=markup)
-            context.bot.send_message(chat_id=chat_id, text=text, reply_markup=markup)
+            sent_message = await context.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                parse_mode='MarkdownV2',
+                reply_markup=markup
+            )
+
+        if last_message and last_message.from_user.id == context.bot.id and last_message.message_id != sent_message.message_id and edit_if_possible:
+            try:
+                await context.bot.delete_message(chat_id=chat_id, message_id=last_message.message_id)
+            except Exception:
+                pass
+
+        if screen_name:
+            context.user_data['current_screen'] = screen_name
+
+
+
+
+    @staticmethod
+    def escape_markdown(text: str) -> str:
+        escape_chars = r'_[]()~`>#+-=|{}.!'
+        return ''.join(f'\\{c}' if c in escape_chars else c for c in text)
 
 class ActionManager:
-    def __init__(self, log) -> None:
-        self.cryptography = CryptographyRepo()
+    def __init__(self) -> None:
         self.database = DBRepo()
         self.google_drive = GoogleDriveRepo()
-        self.screen_manager = ScreenManager(log)
+        self.screen_manager = ScreenManager()
 
         with open("Data/config/screens.json", 'r') as f:
             self.screen_config = json.load(f)
 
-        self.action_methods = {
-
+        self.measurement_names = {
+            "weight": "Weight",
+            "height": "Height",
+            "bonemassFatMuscle": "Body Composition",
+            "chestBustWaistHipThigh": "Anthropometrics",
+            "bloodPressure": "Blood Pressure",
+            "physicalSelfEsteem": "Physical Self Esteem",
+            "menthalSelfEsteem": "Mental Self Esteem",
+            "libidoSelfEsteem": "Libido Self Esteem",
+            "voiceFragment": "Voice Fragment",
+            "photoBody": "Body Photo",
+            "photoFace": "Face Photo"
         }
 
-    def call_action(self, update: Update, context: CallbackContext, action: str):
-        pass
 
-    def load_screen_from_config(self, update: Update, context: CallbackContext, screen_name: str):
+        self.action_methods = {
+            "settings": self.settings,
+            "masterInterval": self.masterInterval,
+            "masterIntervalSet": self.masterIntervalSet,
+            "measurementInterval": self.measurementInterval,
+            "measurementIntervalSet": self.measurementIntervalSet,
+            "measurementIntervalMove": self.measurementIntervalMove,
+            "deleteUserData": self.deleteUserData,
+            "hrtInfo": self.hrtInfo,
+            "hrtInfoSet": self.hrtInfoSet,
+            "hrtInfoType": self.hrtInfoSet,
+            "hrtInfoDose": self.hrtInfoSet,
+            "switchResearchAllowance": self.switchResearchAllowance,
+            "stats": self.stats
+        }
+
+    async def call_action(self, update: Update, context: CallbackContext, action: str):
+        await self.action_methods[action](update, context)
+
+    def get_screen_data(self, screen_name: str):
         text = self.screen_config[screen_name]["text"]
         image_url = self.screen_config[screen_name]["image_url"]
         buttons = self.screen_config[screen_name]["buttons"]
         callbacks = self.screen_config[screen_name]["callbacks"]
-        self.screen_manager.send_screen(update, context, text=text, image_url=image_url, buttons=buttons, callbacks=callbacks)
 
-    def toggleHrt(self, update: Update, context: CallbackContext):
-        pass
+        return text, image_url, buttons, callbacks
+    
+    def get_user_data(self, update: Update):
+        user_id = update.effective_user.id
+        data = self.database.get_user_dict(user_id)
+        return data
+    
+    def get_measurements_row_count(self, update: Update):
+        user_id = update.effective_user.id
+        row_count, first_measurement, last_measurement = self.database.get_measurements_row_count(user_id)
+        return row_count, first_measurement, last_measurement
 
-    def askAll(self, update: Update, context: CallbackContext):
-        pass
+    async def load_screen(self, update: Update, context: CallbackContext, screen_name: str):
+        text, image_url, buttons, callbacks = self.get_screen_data(screen_name)
+        await self.screen_manager.send_screen(update, context, screen_name=screen_name, text=text, image_url=image_url, buttons=buttons, callbacks=callbacks)
+    
+
+    async def incorrect_input_warning(self, update: Update, context: CallbackContext):
+        text, image_url, buttons, callbacks = self.get_screen_data('incorrectInputWarning')
+        await self.screen_manager.send_screen(update, context, text=text, image_url=image_url, buttons=buttons, callbacks=callbacks, edit_if_possible=False)
+    
+    async def settings(self, update: Update, context: CallbackContext):
+        text, image_url, buttons, callbacks = self.get_screen_data('settings')
+        user_data = self.get_user_data(update)
+
+        # Basic info
+        research_allowed = 'yes' if user_data['is_research_allowed'] else 'no'
+        hrt_type = user_data['hrt_type'] if user_data['hrt_type'] else 'no'
+        hrt_dose = f"{user_data['hrt_dose']} mg" if user_data['hrt_dose'] else 'no'
+
+        # Measurement Intervals
+        measurement_lines = []
+        for key, display_name in self.measurement_names.items():
+            interval = user_data.get(f"{key}_interval")
+            interval_text = f"every {interval} measurement(s)" if interval else "no"
+            measurement_lines.append(f"{display_name}: *{interval_text}*")
+
+        dynamic_text = f"""
+Research Allowed: *{research_allowed}*
+HRT Type: *{hrt_type}*
+HRT Dose: *{hrt_dose}*
+
+Measurement Intervals:
+{chr(10).join(measurement_lines)}
+        """
+
+        await self.screen_manager.send_screen(update, context, screen_name='settings', text=text + dynamic_text, image_url=image_url, buttons=buttons, callbacks=callbacks)
+
+    async def hrtInfo(self, update: Update, context: CallbackContext):
+        text, image_url, buttons, callbacks = self.get_screen_data('hrtInfo')
+        user_data = self.get_user_data(update)
+
+        # Basic info
+        hrt_type = user_data['hrt_type'] if user_data['hrt_type'] else 'no'
+        hrt_dose = f"{user_data['hrt_dose']} mg/day" if user_data['hrt_dose'] else 'no'
+
+        dynamic_text = f"""
+HRT Type: *{hrt_type}*
+HRT Dose: *{hrt_dose}*
+        """
+        await self.screen_manager.send_screen(update, context, screen_name='hrtInfo', text=text + dynamic_text, image_url=image_url, buttons=buttons, callbacks=callbacks)
+
+    async def hrtInfoSet(self, update: Update, context: CallbackContext):
+        callback_query = update.callback_query
+        user_id = update.effective_user.id
+
+        if callback_query:
+            action = callback_query.data.split('_')[-1]
+
+            if action == 'remove':
+                self.database.set_user_data(user_id, {'hrt_type': 'NULL', 'hrt_dose': 'NULL'})
+                await self.hrtInfo(update, context)
+            elif action == 'type':
+                await self.load_screen(update, context, screen_name='hrtInfoType')
+            elif action == 'dose':
+                await self.load_screen(update, context, screen_name='hrtInfoDose')
+
+        else:
+            current_screen = context.user_data.get('current_screen')
+            if current_screen == 'hrtInfoType':
+                text = update.message.text 
+                self.database.set_user_data(user_id, hrt_type=text)
+                await self.hrtInfo(update, context)
+            elif current_screen == 'hrtInfoDose':
+                text = update.message.text 
+
+                try:
+                    # Replace comma with dot for EU-style decimals
+                    cleaned_input = text.replace(',', '.').strip()
+                    value = float(cleaned_input)
+                    if value < 0:
+                        await self.incorrect_input_warning(update, context)
+                        return
+                except (ValueError, TypeError):
+                    # Call your custom error function
+                    await self.incorrect_input_warning(update, context)
+                    return
+
+                user_id = update.effective_user.id
+                self.database.set_user_data(user_id, hrt_dose=value)
+                await self.hrtInfo(update, context)
+        
+    async def masterInterval(self, update: Update, context: CallbackContext):
+        text, image_url, buttons, callbacks = self.get_screen_data('masterInterval')
+        user_data = self.get_user_data(update)
+
+        master_interval = user_data['master_interval'] if user_data['master_interval'] else 0
+
+        dynamic_text = f'''
+Current Interval: {master_interval} days
+        '''
+        await self.screen_manager.send_screen(update, context, screen_name='masterInterval', text=text+dynamic_text, image_url=image_url, buttons=buttons, callbacks=callbacks)
+
+    async def masterIntervalSet(self, update: Update, context: CallbackContext):
+        data = update.callback_query.data
+        interval = int(data.split('_')[2])
+
+        user_id = update.effective_user.id
+
+        self.database.set_user_data(user_id, master_interval=interval)
+        await self.masterInterval(update, context)
+
+    async def measurementInterval(self, update: Update, context: CallbackContext):
+        user_data = self.get_user_data(update)
+        
+        current_screen = context.user_data.get('current_screen', '')
+        current_measurement = current_screen.split('_')[-1] if current_screen else None
+        
+        keys = list(self.measurement_names.keys())
+        
+        if current_measurement not in keys:
+            current_measurement = keys[0]  # fallback to first key
+            context.user_data['current_screen'] = f'measurementInterval_{current_measurement}'
+        
+        interval_key = f'{current_measurement}_interval'
+        interval_value = user_data.get(interval_key)
+        value_to_display = f"every {interval_value} measurement(s)" if interval_value else 'no'
+        
+        dynamic_text = f'''
+*{self.measurement_names[current_measurement]}:*
+Current Interval: *{value_to_display}*
+        '''
+        
+        text, image_url, buttons, callbacks = self.get_screen_data('measurementInterval')
+        await self.screen_manager.send_screen(update, context, text=text+dynamic_text, image_url=image_url, buttons=buttons, callbacks=callbacks)
+
+    async def measurementIntervalSet(self, update: Update, context: CallbackContext):
+        data = update.callback_query.data
+        interval = int(data.split('_')[2])
+        current_screen = context.user_data.get('current_screen').split('_')[1] + '_interval'
+
+        user_id = update.effective_user.id
+        self.database.set_user_data(user_id, **{current_screen: interval})
+        await self.measurementInterval(update, context)
+
+    async def measurementIntervalMove(self, update: Update, context: CallbackContext):
+        data = update.callback_query.data
+        direction = int(data.split('_')[2])
+        current_screen = context.user_data.get('current_screen').split('_')[1]
+
+        keys = list(self.measurement_names.keys())
+        i = keys.index(current_screen)
+        next_measurement = keys[(i + direction) % len(keys)]
+
+        context.user_data['current_screen'] = 'measurementInterval_'+next_measurement
+        await self.measurementInterval(update, context)
+
+    async def switchResearchAllowance(self, update: Update, context: CallbackContext):
+        user_id = update.effective_user.id
+        user_data = self.get_user_data(update)
+        new_state = not user_data['is_research_allowed']
+
+        self.database.set_user_data(user_id, is_research_allowed=new_state)
+        await self.settings(update, context)
+
+    async def deleteUserData(self, update: Update, context: CallbackContext):
+        current_screen = context.user_data.get('current_screen')
+        if current_screen != 'deleteUserData':
+            text, image_url, buttons, callbacks = self.get_screen_data('deleteUserData')
+            await self.screen_manager.send_screen(update, context, screen_name='deleteUserData', text=text, image_url=image_url, buttons=buttons, callbacks=callbacks)
+            return
+        
+        text = update.message.text
+        if text == 'delete':
+            user_id = update.effective_user.id
+            self.database.delete_user_data(user_id)
+            text, image_url, buttons, callbacks = self.get_screen_data('deleteUserDataSuccess')
+            await self.screen_manager.send_screen(update, context, screen_name='deleteUserDataSuccess', text=text, image_url=image_url, buttons=buttons, callbacks=callbacks)
+        else:
+            failure_text = "\nYou didn't input *'delete'*\nTry again!"
+            text, image_url, buttons, callbacks = self.get_screen_data('deleteUserData')
+            await self.screen_manager.send_screen(update, context, screen_name='deleteUserData', text=text+failure_text, image_url=image_url, buttons=buttons, callbacks=callbacks)
+        
+    async def stats(self, update: Update, context: CallbackContext):
+        text, image_url, buttons, callbacks = self.get_screen_data('stats')
+        row_count, first_measurement, last_measurement  = self.get_measurements_row_count(update)
+        first_measurement = datetime.fromtimestamp(first_measurement).strftime("%d.%m.%Y") if row_count != 0 else 'None'
+        last_measurement = datetime.fromtimestamp(last_measurement).strftime("%d.%m.%Y") if row_count != 0 else 'None'
+
+        dynamic_text = f'''
+Number Of Measurements: {row_count}
+First Measurement: {first_measurement}
+Latest Measurement: {last_measurement}
+        '''
+        await self.screen_manager.send_screen(update, context, screen_name='stats', text=text+dynamic_text, image_url=image_url, buttons=buttons, callbacks=callbacks)
 
 
 
 
 
-class ButtonManager:
-    def __init__(self, log) -> None:
-        self.action = ActionManager(log)
+class HandlerManager:
+    def __init__(self) -> None:
+        self.action = ActionManager()
+        self.text_input_funcs = ['deleteUserData', 'hrtInfoSet', 'hrtInfoType', 'hrtInfoDose']
+        self.voice_input_funcs = []
+        self.image_input_funcs = []
 
     async def button_handler(self, update: Update, context: CallbackContext):
         query = update.callback_query
@@ -104,11 +365,72 @@ class ButtonManager:
         data = query.data
 
         if data[:3] == 'scr':
-            screen_name = data.split("_")[-1]
-            self.action.load_screen(update=update, context=context, screen_name=screen_name)
+            screen_name = data.split("_")[1]
+            await self.action.load_screen(update=update, context=context, screen_name=screen_name)
+        elif data[:3] == 'cmd':
+            action = data.split("_")[1]
+            await self.action.call_action(update=update, context=context, action=action)
+
+
+
+    async def text_message_handler(self, update: Update, context: CallbackContext):
+        current_screen = context.user_data.get('current_screen')
+        if current_screen in self.text_input_funcs:
+            await self.action.call_action(update=update, context=context, action=current_screen)
         else:
-            action = data.split("_")[-1]
-            self.action.call_action(update=update, context=context, action=action)
+            await self.action.incorrect_input_warning(update, context)
 
 
-class BotManager
+    async def voice_message_handler(self, update: Update, context: CallbackContext):
+        voice = update.message.voice
+        file = await context.bot.get_file(voice.file_id)
+        bytes = await file.download_as_bytearray()
+        status = context.user_data.get('status')
+        if status == 'idle':
+            await self.action.incorrect_input_warning(update, context)
+        else:
+            pass
+
+
+    async def image_message_handler(self, update: Update, context: CallbackContext):
+        # For photos, Telegram sends an array of sizes — take the largest
+        photo = update.message.photo[-1]
+        file = await context.bot.get_file(photo.file_id)
+        bytes = await file.download_as_bytearray()
+        status = context.user_data.get('status')
+        if status == 'idle':
+            await self.action.incorrect_input_warning(update, context)
+        else:
+            pass
+
+
+    async def start(self, update, context):
+        context.user_data['status'] = 'idle'
+        await self.action.load_screen(update=update, context=context, screen_name='start')
+
+    async def settings(self, update, context):
+        pass
+    async def support(self, update, context):
+        pass
+
+
+class BotManager:
+    def __init__(self):
+        self.handler = HandlerManager()
+        
+    def run(self):
+        token = os.getenv('TG_TOKEN')
+        persistence = PicklePersistence(filepath='Data/database/bot_data.pkl')
+        app = ApplicationBuilder().token(token).persistence(persistence).build()
+
+        app.add_handler(CommandHandler("start", self.handler.start))
+        app.add_handler(CommandHandler("settings", self.handler.settings))
+        app.add_handler(CommandHandler("support", self.handler.support))
+
+        app.add_handler(MessageHandler(filters.TEXT, self.handler.text_message_handler))
+        app.add_handler(MessageHandler(filters.VOICE, self.handler.voice_message_handler))
+        app.add_handler(MessageHandler(filters.PHOTO, self.handler.image_message_handler))
+
+        app.add_handler(CallbackQueryHandler(self.handler.button_handler))
+
+        app.run_polling()

@@ -1,8 +1,10 @@
 from multiprocessing import Process
 import json
 import logging
+from dotenv import load_dotenv
 from services.BackupService import BackupService
 from services.FetchService import FetchService
+from services.TelegramInit import BotManager
 
 class Main:
     @staticmethod
@@ -28,12 +30,20 @@ class Main:
         backup_service = BackupService(logging, interval)
         backup_service.run()
 
+    @staticmethod
+    def startup_morphi():
+        Main.setup_logging()
+
+        telegram_initializer = BotManager()
+        telegram_initializer.run()
+
 
 
 
 
 
 if __name__ == "__main__":
+    load_dotenv()
     Main.fetch_data()
 
     logging.basicConfig(
@@ -43,9 +53,12 @@ if __name__ == "__main__":
         )
     
     backuper = Process(target=Main.startup_backup)
+    morphi = Process(target=Main.startup_morphi)
 
     logging.info("Starting up...")
     logging.info("Activating backuper...")
     backuper.start()
-    logging.info("Backuper is activated!")
+    logging.info("Activating Morphi...")
+    morphi.start()
+
 
