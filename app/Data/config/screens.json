@@ -209,18 +209,6 @@
     
     "---MeasurementSeq Nodes": "",
     
-    "measurementSeq": {
-        "image_url": "",
-        "text": "measurementSeq_pch",
-        "buttons": [
-            ["start", "measurementSeqSkip"]
-        ],
-        "callbacks": {
-            "measurementSeqSkip": "cmd_measurementSeqSkip",
-            "start": "cmd_start"
-        }
-    },
-    
     "isCorrect": {
         "image_url": "",
         "text": "isCorrect_pch",
@@ -230,6 +218,204 @@
         "callbacks": {
             "isCorrect_0": "cmd_isCorrect_0",
             "isCorrect_1": "cmd_isCorrect_1"
+        }
+    },
+    
+    "weight": {
+        "image_url": "",
+        "text": "weight_pch",
+        "buttons": [
+            ["measurementSeq_skip"]
+        ],
+        "callbacks": {
+            "measurementSeq_skip": "cmd_measurementSeq_next"
+        }
+    },
+    
+    "height": {
+        "image_url": "",
+        "text": "height_pch",
+        "buttons": [
+            ["measurementSeq_skip"]
+        ],
+        "callbacks": {
+            "measurementSeq_skip": "cmd_measurementSeq_next"
+        }
+    },
+    
+    "bonemass": {
+        "image_url": "",
+        "text": "bonemass_pch",
+        "buttons": [
+            ["measurementSeq_skip"]
+        ],
+        "callbacks": {
+            "measurementSeq_skip": "cmd_measurementSeq_next"
+        }
+    },
+    
+    "fat": {
+        "image_url": "",
+        "text": "fat_pch",
+        "buttons": [
+            ["measurementSeq_skip"]
+        ],
+        "callbacks": {
+            "measurementSeq_skip": "cmd_measurementSeq_next"
+        }
+    },
+    
+    "muscle": {
+        "image_url": "",
+        "text": "muscle_pch",
+        "buttons": [
+            ["measurementSeq_skip"]
+        ],
+        "callbacks": {
+            "measurementSeq_skip": "cmd_measurementSeq_next"
+        }
+    },
+    
+    "chest": {
+        "image_url": "",
+        "text": "chest_pch",
+        "buttons": [
+            ["measurementSeq_skip"]
+        ],
+        "callbacks": {
+            "measurementSeq_skip": "cmd_measurementSeq_next"
+        }
+    },
+    
+    "bust": {
+        "image_url": "",
+        "text": "bust_pch",
+        "buttons": [
+            ["measurementSeq_skip"]
+        ],
+        "callbacks": {
+            "measurementSeq_skip": "cmd_measurementSeq_next"
+        }
+    },
+    
+    "waist": {
+        "image_url": "",
+        "text": "waist_pch",
+        "buttons": [
+            ["measurementSeq_skip"]
+        ],
+        "callbacks": {
+            "measurementSeq_skip": "cmd_measurementSeq_next"
+        }
+    },
+    
+    "hip": {
+        "image_url": "",
+        "text": "thigh_pch",
+        "buttons": [
+            ["measurementSeq_skip"]
+        ],
+        "callbacks": {
+            "measurementSeq_skip": "cmd_measurementSeq_next"
+        }
+    },
+
+    "systolic": {
+        "image_url": "",
+        "text": "systolic_pch",
+        "buttons": [
+            ["measurementSeq_skip"]
+        ],
+        "callbacks": {
+            "measurementSeq_skip": "cmd_measurementSeq_next"
+        }
+    },
+    
+    "diastolic": {
+        "image_url": "",
+        "text": "diastolic_pch",
+        "buttons": [
+            ["measurementSeq_skip"]
+        ],
+        "callbacks": {
+            "measurementSeq_skip": "cmd_measurementSeq_next"
+        }
+    },
+    
+    "heartRate": {
+        "image_url": "",
+        "text": "heartRate_pch",
+        "buttons": [
+            ["measurementSeq_skip"]
+        ],
+        "callbacks": {
+            "measurementSeq_skip": "cmd_measurementSeq_next"
+        }
+    },
+    
+    "physicalSelfEsteem": {
+        "image_url": "",
+        "text": "physicalSelfEsteem_pch",
+        "buttons": [
+            ["measurementSeq_skip"]
+        ],
+        "callbacks": {
+            "measurementSeq_skip": "cmd_measurementSeq_next"
+        }
+    },
+    
+    "menthalSelfEsteem": {
+        "image_url": "",
+        "text": "menthalSelfEsteem_pch",
+        "buttons": [
+            ["measurementSeq_skip"]
+        ],
+        "callbacks": {
+            "measurementSeq_skip": "cmd_measurementSeq_next"
+        }
+    },
+    
+    "libidoSelfEsteem": {
+        "image_url": "",
+        "text": "libidoSelfEsteem_pch",
+        "buttons": [
+            ["measurementSeq_skip"]
+        ],
+        "callbacks": {
+            "measurementSeq_skip": "cmd_measurementSeq_next"
+        }
+    },
+    
+    "voiceFragment": {
+        "image_url": "",
+        "text": "voiceFragment_pch",
+        "buttons": [
+            ["measurementSeq_skip"]
+        ],
+        "callbacks": {
+            "measurementSeq_skip": "cmd_measurementSeq_next"
+        }
+    },
+    
+    "photoBody": {
+        "image_url": "",
+        "text": "photoBody_pch",
+        "buttons": [
+            ["measurementSeq_skip"]
+        ],
+        "callbacks": {
+            "measurementSeq_skip": "cmd_measurementSeq_next"
+        }
+    },
+    
+    "photoFace": {
+        "image_url": "",
+        "text": "photoFace_pch",
+        "buttons": [
+            ["measurementSeq_skip"]
+        ],
+        "callbacks": {
+            "measurementSeq_skip": "cmd_measurementSeq_next"
         }
     },
     

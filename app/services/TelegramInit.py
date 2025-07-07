@@ -101,7 +101,7 @@ class ActionManager:
         with open("Data/config/screens.json", 'r') as f:
             self.screen_config = json.load(f)
 
-        self.measurement_names = {
+        self.measurement_to_human_names = {
             "weight": "Weight",
             "height": "Height",
             "bonemassFatMuscle": "Body Composition",
@@ -115,6 +115,27 @@ class ActionManager:
             "photoFace": "Face Photo"
         }
 
+        self.measurement_to_unit_names = {
+            'weight': 'weight_kg',
+            'height': 'height_cm',
+            'bonemass': 'bonemass_prc',
+            'fat': 'fat_prc',
+            'muscle': 'muscle_prc',
+            'chest': 'chest_cm',
+            'bust': 'bust_cm',
+            'waist': 'waist_cm',
+            'hip': 'hip_cm',
+            'thigh': 'thigh_cm',
+            'systolic': 'systolic_mmhg',
+            'diastolic': 'diastolic_mmhg',
+            'heartRate': 'heartRate_bpm',
+            'physicalSelfEsteem': 'physicalSelfEsteem',
+            'menthalSelfEsteem': 'menthalSelfEsteem',
+            'libidoSelfEsteem': 'libidoSelfEsteem',
+            'voiceFragment': 'voiceFragment_url',
+            'photoBody': 'photoBody_url',
+            'photoFace': 'photoFace_url'
+        }
 
         self.action_methods = {
             "settings": self.settings,
@@ -156,7 +177,7 @@ class ActionManager:
     async def load_screen(self, update: Update, context: CallbackContext, screen_name: str):
         text, image_url, buttons, callbacks = self.get_screen_data(screen_name)
         await self.screen_manager.send_screen(update, context, screen_name=screen_name, text=text, image_url=image_url, buttons=buttons, callbacks=callbacks)
-    
+
 
     async def incorrect_input_warning(self, update: Update, context: CallbackContext):
         text, image_url, buttons, callbacks = self.get_screen_data('incorrectInputWarning')
@@ -173,7 +194,7 @@ class ActionManager:
 
         # Measurement Intervals
         measurement_lines = []
-        for key, display_name in self.measurement_names.items():
+        for key, display_name in self.measurement_to_human_names.items():
             interval = user_data.get(f"{key}_interval")
             interval_text = f"every {interval} measurement(s)" if interval else "no"
             measurement_lines.append(f"{display_name}: *{interval_text}*")
@@ -269,7 +290,7 @@ Current Interval: {master_interval} days
         current_screen = context.user_data.get('current_screen', '')
         current_measurement = current_screen.split('_')[-1] if current_screen else None
         
-        keys = list(self.measurement_names.keys())
+        keys = list(self.measurement_to_human_names.keys())
         
         if current_measurement not in keys:
             current_measurement = keys[0]  # fallback to first key
@@ -280,7 +301,7 @@ Current Interval: {master_interval} days
         value_to_display = f"every {interval_value} measurement(s)" if interval_value else 'no'
         
         dynamic_text = f'''
-*{self.measurement_names[current_measurement]}:*
+*{self.measurement_to_human_names[current_measurement]}:*
 Current Interval: *{value_to_display}*
         '''
         
@@ -298,10 +319,14 @@ Current Interval: *{value_to_display}*
 
     async def measurementIntervalMove(self, update: Update, context: CallbackContext):
         data = update.callback_query.data
-        direction = int(data.split('_')[2])
+        try:
+            direction = int(data.split('_')[-1])
+        except:
+            return
+        
         current_screen = context.user_data.get('current_screen').split('_')[1]
 
-        keys = list(self.measurement_names.keys())
+        keys = list(self.measurement_to_human_names.keys())
         i = keys.index(current_screen)
         next_measurement = keys[(i + direction) % len(keys)]
 
@@ -347,6 +372,41 @@ Latest Measurement: {last_measurement}
         '''
         await self.screen_manager.send_screen(update, context, screen_name='stats', text=text+dynamic_text, image_url=image_url, buttons=buttons, callbacks=callbacks)
 
+    async def measurementSeq(self, update: Update, context: CallbackContext):
+        current_screen = context.user_data.get('current_screen').split('_')
+        data = update.callback_query.data
+        if current_screen[0] != 'measurementSeq':
+            await self.measurementSeqNext(update, context)
+            return
+        if data:
+            action = data.split('_')[-1]
+            if action == 'skip':
+                await self.measurementSeqNext(update, context)
+                return
+            
+        text, image_url, buttons, callbacks = self.get_screen_data(current_screen[-1])
+        await self.screen_manager.send_screen(update, context, text=text, image_url=image_url, buttons=buttons, callbacks=callbacks)
+
+    async def measurementSeqNext(self, update: Update, context: CallbackContext):
+        current_screen = context.user_data.get('current_screen').split('_')[-1]
+        user_id = update.effective_user.id
+        all_screens = self.database.get_due_measurements(user_id)
+
+        if all_screens:
+            i = all_screens.index(current_screen) + 1 if current_screen in all_screens else 0
+            next_measurement = all_screens[(i) % len(all_screens)]
+        else:
+            next_measurement = 'noToMeasure'
+
+        context.user_data['current_screen'] = 'measurementSeq_'+next_measurement
+        await self.measurementSeq(update, context)
+
+    async def measurementSeqSetText(self, update: Update, context: CallbackContext):
+        pass
+    async def measurementSeqSetVoice(self, update: Update, context: CallbackContext):
+        pass
+    async def measurementSeqSetImage(self, update: Update, context: CallbackContext):
+        pass
 
 
 
@@ -374,7 +434,7 @@ class HandlerManager:
 
 
     async def text_message_handler(self, update: Update, context: CallbackContext):
-        current_screen = context.user_data.get('current_screen')
+        current_screen = context.user_data.get('current_screen').split('_')[0]
         if current_screen in self.text_input_funcs:
             await self.action.call_action(update=update, context=context, action=current_screen)
         else:

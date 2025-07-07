@@ -66,41 +66,42 @@ class DBRepo:
 
     def set_user_data(self, user_id: int, **kwargs):
         """
-        Insert or update user data. 
+        Insert or update user data.
         Pass user_id and any other fields as keyword arguments.
+        This version is safe from SQL injection.
         """
-        fields = ['timestamp_joined', 'is_research_allowed', 'hrt_type', 'hrt_dose',
-                'master_interval', 'dose_interval', 'weight_interval', 'height_interval',
-                'bonemassFatMuscle_interval', 'chestBustWaistHipThigh_interval',
-                'bloodPressure_interval', 'physicalSelfEsteem_interval',
-                'menthalSelfEsteem_interval', 'libidoSelfEsteem_interval',
-                'voiceFragment_interval', 'photoBody_interval', 'photoFace_interval']
+        allowed_fields = {
+            'timestamp_joined', 'is_research_allowed', 'hrt_type', 'hrt_dose',
+            'master_interval', 'dose_interval', 'weight_interval', 'height_interval',
+            'bonemassFatMuscle_interval', 'chestBustWaistHipThigh_interval',
+            'bloodPressure_interval', 'physicalSelfEsteem_interval',
+            'menthalSelfEsteem_interval', 'libidoSelfEsteem_interval',
+            'voiceFragment_interval', 'photoBody_interval', 'photoFace_interval'
+        }
 
-        # Validate keys
+        # Validate column names
         for key in kwargs:
-            if key not in fields:
+            if key not in allowed_fields:
                 raise ValueError(f"Invalid field: {key}")
 
-        user_id = self.cryptography_repo.encrypt_int(user_id)
-        # Check if user exists
+        encrypted_user_id = self.cryptography_repo.encrypt_int(user_id)
+
         cursor = self.conn.execute(
-            "SELECT 1 FROM users WHERE user_id = ?", (user_id,))
+            "SELECT 1 FROM users WHERE user_id = ?", (encrypted_user_id,))
         exists = cursor.fetchone() is not None
 
         if exists:
-            # Update only provided fields
             if kwargs:
                 set_clause = ", ".join(f"{key} = ?" for key in kwargs)
-                values = list(kwargs.values())
-                values.append(user_id)
+                values = list(kwargs.values()) + [encrypted_user_id]
                 query = f"UPDATE users SET {set_clause} WHERE user_id = ?"
                 with self.conn:
                     self.conn.execute(query, values)
         else:
-            # Insert new user with provided fields
             columns = ["user_id"] + list(kwargs.keys())
             placeholders = ", ".join("?" for _ in columns)
-            values = [user_id] + list(kwargs.values())
+            values = [encrypted_user_id] + list(kwargs.values())
+            # Columns are from validated keys only
             query = f"INSERT INTO users ({', '.join(columns)}) VALUES ({placeholders})"
             with self.conn:
                 self.conn.execute(query, values)
@@ -109,23 +110,20 @@ class DBRepo:
     def save_measurement(self, user_id: int, **kwargs):
         """
         Save a measurement for a user.
-        - If the last measurement is less than 12 hours old, update it.
-        - Otherwise, insert a new measurement.
+        Safe version: When inserting, automatically includes hrt_type and hrt_dose from user table.
         """
-
-        # Make sure user_id is provided
         if not user_id:
             raise ValueError("user_id must be provided.")
-        
-        user_id = self.cryptography_repo.encrypt_int(user_id)
 
-        # Check if there is a measurement for this user in the last 12 hours
+        encrypted_user_id = self.cryptography_repo.encrypt_int(user_id)
+
         cursor = self.conn.execute("""
-            SELECT measurement_id, timestamp FROM measurements
+            SELECT measurement_id, timestamp
+            FROM measurements
             WHERE user_id = ?
             ORDER BY timestamp DESC
             LIMIT 1
-        """, (user_id,))
+        """, (encrypted_user_id,))
         row = cursor.fetchone()
 
         update_existing = False
@@ -135,28 +133,52 @@ class DBRepo:
             if datetime.now() - last_time < timedelta(hours=12):
                 update_existing = True
 
-        if update_existing:
-            # Update existing measurement
-            if kwargs:
-                set_clause = ', '.join(f"{key} = ?" for key in kwargs)
-                values = list(kwargs.values())
-                values.append(measurement_id)
-                with self.conn:
-                    self.conn.execute(f"""
-                        UPDATE measurements SET {set_clause}
-                        WHERE measurement_id = ?
-                    """, values)
-        else:
-            # Insert new measurement
-            keys = ', '.join(['user_id'] + list(kwargs.keys()))
-            placeholders = ', '.join(['?'] * (len(kwargs) + 1))
-            values = [user_id] + list(kwargs.values())
+        # Validate keys for measurement table
+        allowed_measurement_fields = {
+            'hrt_type', 'hrt_dose_mg', 'weight_kg', 'height_cm',
+            'bonemass_prc', 'fat_prc', 'muscle_prc',
+            'chest_cm', 'bust_cm', 'waist_cm', 'hip_cm', 'thigh_cm',
+            'systolic_mmhg', 'diastolic_mmhg', 'heartRate_bpm',
+            'physicalSelfEsteem', 'menthalSelfEsteem', 'libidoSelfEsteem',
+            'voiceFragment_url', 'photoBody_url', 'photoFace_url'
+        }
 
+        for key in kwargs:
+            if key not in allowed_measurement_fields:
+                raise ValueError(f"Invalid measurement field: {key}")
+
+        if update_existing:
+            if kwargs:
+                set_clause = ", ".join(f"{key} = ?" for key in kwargs)
+                values = list(kwargs.values()) + [measurement_id]
+                query = f"""
+                    UPDATE measurements
+                    SET {set_clause}
+                    WHERE measurement_id = ?
+                """
+                with self.conn:
+                    self.conn.execute(query, values)
+        else:
+            # Get hrt_type and hrt_dose from user table
+            cursor = self.conn.execute("""
+                SELECT hrt_type, hrt_dose
+                FROM users
+                WHERE user_id = ?
+            """, (encrypted_user_id,))
+            user_row = cursor.fetchone()
+            hrt_type, hrt_dose = user_row if user_row else (None, None)
+
+            keys = ['user_id', 'hrt_type', 'hrt_dose_mg'] + list(kwargs.keys())
+            placeholders = ", ".join("?" for _ in keys)
+            values = [encrypted_user_id, hrt_type, hrt_dose] + list(kwargs.values())
+
+            query = f"""
+                INSERT INTO measurements ({', '.join(keys)})
+                VALUES ({placeholders})
+            """
             with self.conn:
-                self.conn.execute(f"""
-                    INSERT INTO measurements ({keys})
-                    VALUES ({placeholders})
-                """, values)
+                self.conn.execute(query, values)
+
 
 
     def get_measurements_df(self, user_id):
@@ -226,3 +248,83 @@ class DBRepo:
         with self.conn:
             self.conn.execute("DELETE FROM measurements WHERE user_id = ?", (encrypted_user_id,))
             self.conn.execute("DELETE FROM users WHERE user_id = ?", (encrypted_user_id,))
+
+    def get_due_measurements(self, user_id: int):
+        """
+        Returns a list of measurement names (e.g. 'weight_kg') where:
+        - The user's interval is not 0 or None
+        - And the number of measurements since it was last recorded (inclusive) >= interval
+        """
+
+        encrypted_user_id = self.cryptography_repo.encrypt_int(user_id)
+
+        # Get the user's interval settings
+        cursor = self.conn.execute("""
+            SELECT * FROM users WHERE user_id = ?
+        """, (encrypted_user_id,))
+        user_row = cursor.fetchone()
+        if not user_row:
+            return []
+
+        # Get column names
+        columns = [desc[0] for desc in cursor.description]
+        user_data = dict(zip(columns, user_row))
+
+        # Map measurements to their _interval fields
+        measurement_intervals = {
+            'weight_kg': user_data.get('weight_interval'),
+            'height_cm': user_data.get('height_interval'),
+            'bonemass_prc': user_data.get('bonemassFatMuscle_interval'),
+            'fat_prc': user_data.get('bonemassFatMuscle_interval'),
+            'muscle_prc': user_data.get('bonemassFatMuscle_interval'),
+            'chest_cm': user_data.get('chestBustWaistHipThigh_interval'),
+            'bust_cm': user_data.get('chestBustWaistHipThigh_interval'),
+            'waist_cm': user_data.get('chestBustWaistHipThigh_interval'),
+            'hip_cm': user_data.get('chestBustWaistHipThigh_interval'),
+            'thigh_cm': user_data.get('chestBustWaistHipThigh_interval'),
+            'systolic_mmhg': user_data.get('bloodPressure_interval'),
+            'diastolic_mmhg': user_data.get('bloodPressure_interval'),
+            'heartRate_bpm': user_data.get('bloodPressure_interval'),
+            'physicalSelfEsteem': user_data.get('physicalSelfEsteem_interval'),
+            'menthalSelfEsteem': user_data.get('menthalSelfEsteem_interval'),
+            'libidoSelfEsteem': user_data.get('libidoSelfEsteem_interval'),
+            'voiceFragment_url': user_data.get('voiceFragment_interval'),
+            'photoBody_url': user_data.get('photoBody_interval'),
+            'photoFace_url': user_data.get('photoFace_interval'),
+        }
+
+        due_measurements = []
+
+        for measurement, interval in measurement_intervals.items():
+            if not interval or interval == 0:
+                continue  # skip if interval is None or 0
+
+            # Find last timestamp this measurement had a non-null value
+            cursor = self.conn.execute(f"""
+                SELECT timestamp
+                FROM measurements
+                WHERE user_id = ?
+                AND {measurement} IS NOT NULL
+                ORDER BY timestamp DESC
+                LIMIT 1
+            """, (encrypted_user_id,))
+            row = cursor.fetchone()
+
+            if row:
+                last_timestamp = row[0]
+                # Count how many measurements since (inclusive)
+                cursor = self.conn.execute("""
+                    SELECT COUNT(*)
+                    FROM measurements
+                    WHERE user_id = ?
+                    AND timestamp >= ?
+                """, (encrypted_user_id, last_timestamp))
+                count = cursor.fetchone()[0]
+            else:
+                # If never recorded, treat it as due immediately
+                count = interval
+
+            if count >= interval:
+                due_measurements.append(measurement)
+
+        return due_measurements
