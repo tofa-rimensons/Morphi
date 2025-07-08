@@ -209,15 +209,14 @@
     
     "---MeasurementSeq Nodes": "",
     
-    "isCorrect": {
+    "noToMeasure": {
         "image_url": "",
-        "text": "isCorrect_pch",
+        "text": "noToMeasure_pch",
         "buttons": [
-            ["isCorrect_0", "isCorrect_1"]
+            ["start"]
         ],
         "callbacks": {
-            "isCorrect_0": "cmd_isCorrect_0",
-            "isCorrect_1": "cmd_isCorrect_1"
+            "start": "scr_start"
         }
     },
     
@@ -228,7 +227,7 @@
             ["measurementSeq_skip"]
         ],
         "callbacks": {
-            "measurementSeq_skip": "cmd_measurementSeq_next"
+            "measurementSeq_skip": "cmd_measurementSeqNext"
         }
     },
     
@@ -239,7 +238,7 @@
             ["measurementSeq_skip"]
         ],
         "callbacks": {
-            "measurementSeq_skip": "cmd_measurementSeq_next"
+            "measurementSeq_skip": "cmd_measurementSeqNext"
         }
     },
     
@@ -250,7 +249,7 @@
             ["measurementSeq_skip"]
         ],
         "callbacks": {
-            "measurementSeq_skip": "cmd_measurementSeq_next"
+            "measurementSeq_skip": "cmd_measurementSeqNext"
         }
     },
     
@@ -261,7 +260,7 @@
             ["measurementSeq_skip"]
         ],
         "callbacks": {
-            "measurementSeq_skip": "cmd_measurementSeq_next"
+            "measurementSeq_skip": "cmd_measurementSeqNext"
         }
     },
     
@@ -272,7 +271,7 @@
             ["measurementSeq_skip"]
         ],
         "callbacks": {
-            "measurementSeq_skip": "cmd_measurementSeq_next"
+            "measurementSeq_skip": "cmd_measurementSeqNext"
         }
     },
     
@@ -283,7 +282,7 @@
             ["measurementSeq_skip"]
         ],
         "callbacks": {
-            "measurementSeq_skip": "cmd_measurementSeq_next"
+            "measurementSeq_skip": "cmd_measurementSeqNext"
         }
     },
     
@@ -294,7 +293,7 @@
             ["measurementSeq_skip"]
         ],
         "callbacks": {
-            "measurementSeq_skip": "cmd_measurementSeq_next"
+            "measurementSeq_skip": "cmd_measurementSeqNext"
         }
     },
     
@@ -305,18 +304,29 @@
             ["measurementSeq_skip"]
         ],
         "callbacks": {
-            "measurementSeq_skip": "cmd_measurementSeq_next"
+            "measurementSeq_skip": "cmd_measurementSeqNext"
         }
     },
     
     "hip": {
+        "image_url": "",
+        "text": "hip_pch",
+        "buttons": [
+            ["measurementSeq_skip"]
+        ],
+        "callbacks": {
+            "measurementSeq_skip": "cmd_measurementSeqNext"
+        }
+    },
+    
+    "thigh": {
         "image_url": "",
         "text": "thigh_pch",
         "buttons": [
             ["measurementSeq_skip"]
         ],
         "callbacks": {
-            "measurementSeq_skip": "cmd_measurementSeq_next"
+            "measurementSeq_skip": "cmd_measurementSeqNext"
         }
     },
 
@@ -327,7 +337,7 @@
             ["measurementSeq_skip"]
         ],
         "callbacks": {
-            "measurementSeq_skip": "cmd_measurementSeq_next"
+            "measurementSeq_skip": "cmd_measurementSeqNext"
         }
     },
     
@@ -338,7 +348,7 @@
             ["measurementSeq_skip"]
         ],
         "callbacks": {
-            "measurementSeq_skip": "cmd_measurementSeq_next"
+            "measurementSeq_skip": "cmd_measurementSeqNext"
         }
     },
     
@@ -349,7 +359,7 @@
             ["measurementSeq_skip"]
         ],
         "callbacks": {
-            "measurementSeq_skip": "cmd_measurementSeq_next"
+            "measurementSeq_skip": "cmd_measurementSeqNext"
         }
     },
     
@@ -360,7 +370,7 @@
             ["measurementSeq_skip"]
         ],
         "callbacks": {
-            "measurementSeq_skip": "cmd_measurementSeq_next"
+            "measurementSeq_skip": "cmd_measurementSeqNext"
         }
     },
     
@@ -371,7 +381,7 @@
             ["measurementSeq_skip"]
         ],
         "callbacks": {
-            "measurementSeq_skip": "cmd_measurementSeq_next"
+            "measurementSeq_skip": "cmd_measurementSeqNext"
         }
     },
     
@@ -382,7 +392,7 @@
             ["measurementSeq_skip"]
         ],
         "callbacks": {
-            "measurementSeq_skip": "cmd_measurementSeq_next"
+            "measurementSeq_skip": "cmd_measurementSeqNext"
         }
     },
     
@@ -393,7 +403,7 @@
             ["measurementSeq_skip"]
         ],
         "callbacks": {
-            "measurementSeq_skip": "cmd_measurementSeq_next"
+            "measurementSeq_skip": "cmd_measurementSeqNext"
         }
     },
     
@@ -404,7 +414,7 @@
             ["measurementSeq_skip"]
         ],
         "callbacks": {
-            "measurementSeq_skip": "cmd_measurementSeq_next"
+            "measurementSeq_skip": "cmd_measurementSeqNext"
         }
     },
     
@@ -412,10 +422,10 @@
         "image_url": "",
         "text": "photoFace_pch",
         "buttons": [
-            ["measurementSeq_skip"]
+            ["start"]
         ],
         "callbacks": {
-            "measurementSeq_skip": "cmd_measurementSeq_next"
+            "start": "scr_start"
         }
     },
     

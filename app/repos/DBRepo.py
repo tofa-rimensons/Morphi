@@ -16,7 +16,7 @@ class DBRepo:
             self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS users (
                     user_id VARCHAR(64) PRIMARY KEY,
-                    timestamp_joined INTEGER,
+                    timestamp_joined INTEGER DEFAULT (strftime('%s','now')),
                     is_research_allowed BOOLEAN,
                     hrt_type VARCHAR,
                     hrt_dose REAL,
@@ -37,7 +37,7 @@ class DBRepo:
             self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS measurements (
                     measurement_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    timestamp INTEGER DEFAULT CURRENT_TIMESTAMP,
+                    timestamp INTEGER DEFAULT (strftime('%s','now')),
                     user_id VARCHAR(64),
                     hrt_type VARCHAR,
                     hrt_dose_mg REAL,
@@ -190,6 +190,25 @@ class DBRepo:
         """
         return pd.read_sql_query(query, self.conn, params=(user_id,))
     
+    def get_last_measurement(self, user_id: int) -> dict | None:
+        encrypted_user_id = self.cryptography_repo.encrypt_int(user_id)
+
+        cursor = self.conn.execute("""
+            SELECT *
+            FROM measurements
+            WHERE user_id = ?
+            ORDER BY timestamp DESC
+            LIMIT 1
+        """, (encrypted_user_id,))
+
+        row = cursor.fetchone()
+        if not row:
+            return None
+
+        columns = [desc[0] for desc in cursor.description]
+        return dict(zip(columns, row))
+
+    
     def get_measurements_row_count(self, user_id):
         user_id = self.cryptography_repo.encrypt_int(user_id)
         query = """
@@ -325,6 +344,6 @@ class DBRepo:
                 count = interval
 
             if count >= interval:
-                due_measurements.append(measurement)
+                due_measurements.append(measurement.split('_')[0])
 
         return due_measurements

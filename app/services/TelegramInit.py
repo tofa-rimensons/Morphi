@@ -1,12 +1,14 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Updater, CommandHandler, PicklePersistence, CallbackQueryHandler, CallbackContext, ApplicationBuilder, MessageHandler, filters, ContextTypes
 import os
-import aiofiles
+import io
 import datetime
 import json
+import time
 from repos.GoogleDriveRepo import GoogleDriveRepo
 from repos.DBRepo import DBRepo
 import logging
+import subprocess
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
@@ -98,6 +100,9 @@ class ActionManager:
         self.google_drive = GoogleDriveRepo()
         self.screen_manager = ScreenManager()
 
+        self.image_folder = os.getenv('IMAGE_FOLDER')
+        self.vocals_folder = os.getenv('VOCALS_FOLDER')
+
         with open("Data/config/screens.json", 'r') as f:
             self.screen_config = json.load(f)
 
@@ -150,7 +155,12 @@ class ActionManager:
             "hrtInfoType": self.hrtInfoSet,
             "hrtInfoDose": self.hrtInfoSet,
             "switchResearchAllowance": self.switchResearchAllowance,
-            "stats": self.stats
+            "stats": self.stats,
+            "measurementSeq": self.measurementSeq,
+            "measurementSeqNext": self.measurementSeqNext,
+            "measurementSeqSetText": self.measurementSeqSetText,
+            "measurementSeqSetVoice": self.measurementSeqSetVoice,
+            "measurementSeqSetImage": self.measurementSeqSetImage
         }
 
     async def call_action(self, update: Update, context: CallbackContext, action: str):
@@ -179,9 +189,10 @@ class ActionManager:
         await self.screen_manager.send_screen(update, context, screen_name=screen_name, text=text, image_url=image_url, buttons=buttons, callbacks=callbacks)
 
 
-    async def incorrect_input_warning(self, update: Update, context: CallbackContext):
-        text, image_url, buttons, callbacks = self.get_screen_data('incorrectInputWarning')
-        await self.screen_manager.send_screen(update, context, text=text, image_url=image_url, buttons=buttons, callbacks=callbacks, edit_if_possible=False)
+    async def incorrect_input_warning(self, update: Update, info: str):
+        text, _, _, _ = self.get_screen_data('incorrectInputWarning')
+        text = self.screen_manager.escape_markdown(text+info)
+        await update.message.reply_text(text=text, parse_mode='MarkdownV2')
     
     async def settings(self, update: Update, context: CallbackContext):
         text, image_url, buttons, callbacks = self.get_screen_data('settings')
@@ -253,11 +264,11 @@ HRT Dose: *{hrt_dose}*
                     cleaned_input = text.replace(',', '.').strip()
                     value = float(cleaned_input)
                     if value < 0:
-                        await self.incorrect_input_warning(update, context)
+                        await self.incorrect_input_warning(update, "*Value should be positive*")
                         return
                 except (ValueError, TypeError):
                     # Call your custom error function
-                    await self.incorrect_input_warning(update, context)
+                    await self.incorrect_input_warning(update, "*Incorrect format*\n(Enter number only)")
                     return
 
                 user_id = update.effective_user.id
@@ -271,7 +282,7 @@ HRT Dose: *{hrt_dose}*
         master_interval = user_data['master_interval'] if user_data['master_interval'] else 0
 
         dynamic_text = f'''
-Current Interval: {master_interval} days
+Current Interval: *{master_interval} days*
         '''
         await self.screen_manager.send_screen(update, context, screen_name='masterInterval', text=text+dynamic_text, image_url=image_url, buttons=buttons, callbacks=callbacks)
 
@@ -374,18 +385,35 @@ Latest Measurement: {last_measurement}
 
     async def measurementSeq(self, update: Update, context: CallbackContext):
         current_screen = context.user_data.get('current_screen').split('_')
-        data = update.callback_query.data
-        if current_screen[0] != 'measurementSeq':
+        callback_query = update.callback_query
+        if current_screen[-1] not in list(self.measurement_to_unit_names.keys()):
             await self.measurementSeqNext(update, context)
             return
-        if data:
+        if callback_query:
+            data = callback_query.data
             action = data.split('_')[-1]
             if action == 'skip':
                 await self.measurementSeqNext(update, context)
                 return
+        
+        user_id = update.effective_user.id
+        col_name = self.measurement_to_unit_names[current_screen[-1]]
+        col_name_splitted = col_name.split('_')
+        unit = '' if len(col_name_splitted) < 2 or col_name_splitted[-1]=='url' else ' '+col_name_splitted[-1]
+        last_measurement = self.database.get_last_measurement(user_id)
+        measurement_key = current_screen[-1]
+
+        if last_measurement:
+            measurement_val = f"{last_measurement[col_name]}{unit}" if last_measurement[col_name] else 'no'
+        else:
+            measurement_val = 'no'
+
+        dynamic_text = f"""
+{measurement_key}: *{measurement_val}*
+        """
             
         text, image_url, buttons, callbacks = self.get_screen_data(current_screen[-1])
-        await self.screen_manager.send_screen(update, context, text=text, image_url=image_url, buttons=buttons, callbacks=callbacks)
+        await self.screen_manager.send_screen(update, context, text=text+dynamic_text, image_url=image_url, buttons=buttons, callbacks=callbacks)
 
     async def measurementSeqNext(self, update: Update, context: CallbackContext):
         current_screen = context.user_data.get('current_screen').split('_')[-1]
@@ -394,19 +422,129 @@ Latest Measurement: {last_measurement}
 
         if all_screens:
             i = all_screens.index(current_screen) + 1 if current_screen in all_screens else 0
-            next_measurement = all_screens[(i) % len(all_screens)]
+            num_screens = len(all_screens)
+            if i < num_screens:
+                next_measurement = all_screens[i]
         else:
-            next_measurement = 'noToMeasure'
+            await self.load_screen(update, context, screen_name='noToMeasure')
+            return
 
         context.user_data['current_screen'] = 'measurementSeq_'+next_measurement
         await self.measurementSeq(update, context)
 
     async def measurementSeqSetText(self, update: Update, context: CallbackContext):
-        pass
+        current_screen = context.user_data.get('current_screen').split('_')[-1]
+        if current_screen in ['voiceFragment', 'photoBody', 'photoFace']:
+            await self.incorrect_input_warning(update, "*Incorrect format*\n(Enter number only)")
+            return
+        
+        text = update.message.text
+        try:
+            # Replace comma with dot for EU-style decimals
+            cleaned_input = text.replace(',', '.').strip()
+            value = float(cleaned_input)
+            if value < 0:
+                await self.incorrect_input_warning(update, "*Value should be positive*")
+                return
+            if 'SelfEsteem' in current_screen:
+                if value > 5:
+                    await self.incorrect_input_warning(update, "*Value should be between 0 and 5*")
+                    return
+        except (ValueError, TypeError):
+            # Call your custom error function
+            await self.incorrect_input_warning(update, "*Incorrect format*\n(Enter number only)")
+            return
+        
+        user_id = update.effective_user.id
+        self.database.save_measurement(user_id, **{self.measurement_to_unit_names[current_screen]: value})
+        await self.measurementSeq(update, context)
+
     async def measurementSeqSetVoice(self, update: Update, context: CallbackContext):
-        pass
+        current_screen = context.user_data.get('current_screen').split('_')[-1]
+        print(current_screen)
+        if current_screen != 'voiceFragment':
+            await self.incorrect_input_warning(update, "*Incorrect format*\n(Send audio only)")
+            return
+        
+        if update.message.voice:
+            file_id = update.message.voice.file_id
+        elif update.message.audio:
+            file_id = update.message.audio.file_id
+        elif update.message.document and update.message.document.mime_type.startswith('audio/'):
+            file_id = update.message.document.file_id
+        else:
+            await self.incorrect_input_warning(update, "*Incorrect format*\n(Send audio only)")
+            return
+
+        # Get the file
+        telegram_file = await context.bot.get_file(file_id)
+        file_bytes = io.BytesIO()
+        await telegram_file.download_to_memory(out=file_bytes)
+        file_bytes.seek(0)
+
+        # Convert to MP3 bytes using ffmpeg
+        mp3_bytes = io.BytesIO()
+        process = subprocess.run(
+            ['ffmpeg', '-i', 'pipe:0', '-f', 'mp3', 'pipe:1'],
+            input=file_bytes.read(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        mp3_bytes.write(process.stdout)
+        mp3_bytes.seek(0)
+
+        filename = str(int(time.time()))
+        url = self.google_drive.upload_file_from_bytes(file_bytes=mp3_bytes, filename=filename, folder_id=self.vocals_folder, encode=True)
+
+        col_name = self.measurement_to_unit_names[current_screen]
+        user_id = update.effective_user.id
+        last_measurement = self.database.get_last_measurement(user_id)
+        if last_measurement:
+            last_url = last_measurement[col_name]
+            if last_url:
+                self.google_drive.delete_file(last_url)
+
+        self.database.save_measurement(user_id, **{col_name: url})
+        await self.measurementSeq(update, context)
+
     async def measurementSeqSetImage(self, update: Update, context: CallbackContext):
-        pass
+        current_screen = context.user_data.get('current_screen').split('_')[-1]
+        if current_screen not in ['photoBody', 'photoFace']:
+            await self.incorrect_input_warning(update, "*Incorrect format*\n(Send image only)")
+            return
+        
+        image_data = io.BytesIO()
+
+        if update.message.photo:
+            # Pick largest photo size
+            photo = update.message.photo[-1]
+            file = await context.bot.get_file(photo.file_id)
+            await file.download_to_memory(out=image_data)
+
+        elif update.message.document and update.message.document.mime_type.startswith('image/'):
+            # Image sent as document
+            file = await context.bot.get_file(update.message.document.file_id)
+            await file.download_to_memory(out=image_data)
+
+        else:
+            await self.incorrect_input_warning(update, "*Incorrect format*\n(Send image only)")
+            return
+
+        image_data.seek(0)
+
+        filename = str(int(time.time()))
+        url = self.google_drive.upload_file_from_bytes(file_bytes=image_data, filename=filename, folder_id=self.vocals_folder, encode=True)
+
+        col_name = self.measurement_to_unit_names[current_screen]
+        user_id = update.effective_user.id
+        last_measurement = self.database.get_last_measurement(user_id)
+        if last_measurement:
+            last_url = last_measurement[col_name]
+            if last_url:
+                self.google_drive.delete_file(last_url)
+                
+        self.database.save_measurement(user_id, **{col_name: url})
+        await self.measurementSeq(update, context)
 
 
 
@@ -414,9 +552,21 @@ Latest Measurement: {last_measurement}
 class HandlerManager:
     def __init__(self) -> None:
         self.action = ActionManager()
-        self.text_input_funcs = ['deleteUserData', 'hrtInfoSet', 'hrtInfoType', 'hrtInfoDose']
-        self.voice_input_funcs = []
-        self.image_input_funcs = []
+        self.text_input_funcs = {
+            'deleteUserData': 'deleteUserData', 
+            'hrtInfoSet': 'hrtInfoSet', 
+            'hrtInfoType': 'hrtInfoType', 
+            'hrtInfoDose': 'hrtInfoDose', 
+            'measurementSeq':'measurementSeqSetText'
+            }
+        
+        self.voice_input_funcs = {
+            'measurementSeq':'measurementSeqSetVoice'
+            }
+        
+        self.image_input_funcs = {
+            'measurementSeq':'measurementSeqSetImage'
+            }
 
     async def button_handler(self, update: Update, context: CallbackContext):
         query = update.callback_query
@@ -432,47 +582,25 @@ class HandlerManager:
             await self.action.call_action(update=update, context=context, action=action)
 
 
-
     async def text_message_handler(self, update: Update, context: CallbackContext):
         current_screen = context.user_data.get('current_screen').split('_')[0]
-        if current_screen in self.text_input_funcs:
-            await self.action.call_action(update=update, context=context, action=current_screen)
-        else:
-            await self.action.incorrect_input_warning(update, context)
+        if current_screen in list(self.text_input_funcs.keys()):
+            await self.action.call_action(update=update, context=context, action=self.text_input_funcs[current_screen])
 
 
     async def voice_message_handler(self, update: Update, context: CallbackContext):
-        voice = update.message.voice
-        file = await context.bot.get_file(voice.file_id)
-        bytes = await file.download_as_bytearray()
-        status = context.user_data.get('status')
-        if status == 'idle':
-            await self.action.incorrect_input_warning(update, context)
-        else:
-            pass
+        current_screen = context.user_data.get('current_screen').split('_')[0]
+        if current_screen in list(self.voice_input_funcs.keys()):
+            await self.action.call_action(update=update, context=context, action=self.voice_input_funcs[current_screen])
 
 
     async def image_message_handler(self, update: Update, context: CallbackContext):
-        # For photos, Telegram sends an array of sizes — take the largest
-        photo = update.message.photo[-1]
-        file = await context.bot.get_file(photo.file_id)
-        bytes = await file.download_as_bytearray()
-        status = context.user_data.get('status')
-        if status == 'idle':
-            await self.action.incorrect_input_warning(update, context)
-        else:
-            pass
-
+        current_screen = context.user_data.get('current_screen').split('_')[0]
+        if current_screen in list(self.image_input_funcs.keys()):
+            await self.action.call_action(update=update, context=context, action=self.image_input_funcs[current_screen])
 
     async def start(self, update, context):
-        context.user_data['status'] = 'idle'
         await self.action.load_screen(update=update, context=context, screen_name='start')
-
-    async def settings(self, update, context):
-        pass
-    async def support(self, update, context):
-        pass
-
 
 class BotManager:
     def __init__(self):
@@ -484,11 +612,9 @@ class BotManager:
         app = ApplicationBuilder().token(token).persistence(persistence).build()
 
         app.add_handler(CommandHandler("start", self.handler.start))
-        app.add_handler(CommandHandler("settings", self.handler.settings))
-        app.add_handler(CommandHandler("support", self.handler.support))
 
         app.add_handler(MessageHandler(filters.TEXT, self.handler.text_message_handler))
-        app.add_handler(MessageHandler(filters.VOICE, self.handler.voice_message_handler))
+        app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO | filters.Document.AUDIO, self.handler.voice_message_handler))
         app.add_handler(MessageHandler(filters.PHOTO, self.handler.image_message_handler))
 
         app.add_handler(CallbackQueryHandler(self.handler.button_handler))

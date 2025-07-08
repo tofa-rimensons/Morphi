@@ -1,6 +1,7 @@
 from repos.GoogleDriveRepo import GoogleDriveRepo
 import time
 import os
+import io
 
 class BackupService:
     def __init__(self, log, interval):
@@ -27,7 +28,7 @@ class BackupService:
                 data = f.read()
 
             self.log.info(f"Starting to push: {file} [{len(data)/1e6:.2f} MB]")
-            self.drive_repo.upload_file_from_bytes(file_bytes=data, filename=file, folder_id=folder_id)
+            self.drive_repo.upload_file_from_bytes(file_bytes=io.BytesIO(data), filename=file, folder_id=folder_id)
             if file in files_to_delete:
                 self.drive_repo.delete_file(files_to_delete[file])
 

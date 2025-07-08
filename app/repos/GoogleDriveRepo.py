@@ -22,7 +22,7 @@ class GoogleDriveRepo:
             credentials_json_path, scopes=scopes)
         self.service = build('drive', 'v3', credentials=credentials, cache_discovery=False)
 
-    def upload_file_from_bytes(self, file_bytes: bytes, filename: str, folder_id: str, encode: bool=False, mime_type: str='application/octet-stream'):
+    def upload_file_from_bytes(self, file_bytes: io.BytesIO, filename: str, folder_id: str, encode: bool=False, mime_type: str='application/octet-stream'):
         """
         Upload a file directly from bytes with a given filename and MIME type.
 
@@ -35,7 +35,7 @@ class GoogleDriveRepo:
             'name': filename,
             'parents': [folder_id]
         }
-        file_stream = self.cryptography_repo.resize_and_optimize_if_image(io.BytesIO(file_bytes))
+        file_stream = self.cryptography_repo.resize_and_optimize_if_image(file_bytes)
         if encode:
             file_stream = self.cryptography_repo.encrypt_file(file_stream)
 
