@@ -4,7 +4,7 @@ from telegram.request import HTTPXRequest
 import os
 import io
 from pydub import AudioSegment
-import datetime
+from datetime import datetime
 import json
 import time
 from repos.GoogleDriveRepo import GoogleDriveRepo
@@ -215,16 +215,21 @@ class ActionManager:
             user_id = update.effective_user.id
             file_ids = self.database.get_measurement_values(user_id, col_name_list=col_name_list)
 
-            zip_bytes = self.downloader.download_files_as_zip(zip_filename=f"{zip_name}_{user_id}.zip", 
+            zip_bytes = self.downloader.download_files_as_zip(zip_name=f"{zip_name}_{user_id}.zip", 
                                                             file_ids=file_ids, decode=True, file_extension=file_extension, 
                                                             max_zip_size=self.max_zip_size)
+            
+            zip_file = io.BytesIO(zip_bytes)
+            zip_file.name = f"{zip_name}_{user_id}.zip"
+            
             await context.bot.send_document(
                 chat_id=update.effective_chat.id,
-                document=zip_bytes
+                document=zip_file
             )
-
             await self.load_screen(update, context, screen_name='downloadComplete')
+            
         finally:
+            
             context.user_data['is_downloading'] = False
 
     async def incorrect_input_warning(self, update: Update, info: str):
@@ -623,10 +628,18 @@ Latest Measurement: {last_measurement}
             user_id = update.effective_user.id
             measurement_df = self.database.get_measurements_df(user_id)
 
-            zip_bytes = self.downloader.dataframe_to_zip_bytes(df=measurement_df, csv_filename="measurementData.csv", zip_filename=f"measurementData_{user_id}.zip")
+            zip_bytes = self.downloader.dataframe_to_zip_bytes(
+                df=measurement_df,
+                csv_filename="measurementData.csv",
+                zip_filename=f"measurementData_{user_id}.zip"
+            )
+
+            zip_file = io.BytesIO(zip_bytes)
+            zip_file.name = f"measurementData_{user_id}.zip"
+            
             await context.bot.send_document(
                 chat_id=update.effective_chat.id,
-                document=zip_bytes
+                document=zip_file
             )
 
             await self.load_screen(update, context, screen_name='downloadComplete')

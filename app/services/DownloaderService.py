@@ -6,6 +6,8 @@ import os
 import pandas as pd
 import io
 
+import traceback
+
 
 class DownloaderService:
     def __init__(self):
@@ -69,13 +71,18 @@ class DownloaderService:
             with open(tmp_zip_path, 'rb') as f:
                 zip_bytes = f.read()
 
+        except Exception as e:
+            tb_str = traceback.format_exc()  # <-- full traceback as string
+            print(tb_str)
+            return tb_str  # <-- return if you want the caller to see it
+
         finally:
             # Clean up
             os.remove(tmp_zip_path)
 
             return zip_bytes
 
-    def dataframe_to_zip_bytes(df: pd.DataFrame, csv_filename="data.csv", zip_filename="data.zip") -> bytes:
+    def dataframe_to_zip_bytes(self, df: pd.DataFrame, csv_filename="data.csv", zip_filename="data.zip") -> bytes:
         # Create a bytes buffer for the zip file
         zip_buffer = io.BytesIO()
 

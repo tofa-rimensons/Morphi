@@ -43,24 +43,39 @@ class GoogleDriveRepo:
             with open(self.token_path, 'w') as token_file:
                 token_file.write(self.creds.to_json())
 
-    def upload_file_from_bytes(self, file_bytes: io.BytesIO, filename: str, folder_id: str, encode: bool = False, mime_type: str = 'application/octet-stream'):
+    def upload_file_from_bytes(self, file_bytes, filename: str, folder_id: str, encode: bool = False, mime_type: str = 'application/octet-stream'):
         """
-        Upload a file directly from bytes with a given filename and MIME type.
+        Upload a file from bytes or BytesIO with a given filename and MIME type.
 
-        :param file_bytes: File content in bytes
+        :param file_bytes: File content, either bytes or io.BytesIO
         :param filename: Name of the file to save in Drive (including extension or none)
+        :param encode: Whether to encrypt the file before upload
         :param mime_type: MIME type of the file (e.g., 'application/octet-stream' for unknown)
         :return: file ID string
         """
-        file_metadata = {
-            'name': filename,
-            'parents': [folder_id]
-        }
-        file_stream = self.cryptography_repo.resize_and_optimize_if_image(file_bytes)
+
+        # If file_bytes is raw bytes, convert to BytesIO for MediaIoBaseUpload
+        if isinstance(file_bytes, bytes):
+            file_stream = io.BytesIO(file_bytes)
+        elif isinstance(file_bytes, io.BytesIO):
+            file_stream = file_bytes
+            # Ensure the pointer is at the start
+            file_stream.seek(0)
+        else:
+            raise TypeError(f"file_bytes must be bytes or io.BytesIO, got {type(file_bytes)}")
+
+        # Optional: resize/optimize if image
+        file_stream = self.cryptography_repo.resize_and_optimize_if_image(file_stream)
+
         if encode:
             file_stream = self.cryptography_repo.encrypt_file(file_stream)
 
         media = MediaIoBaseUpload(file_stream, mimetype=mime_type)
+
+        file_metadata = {
+            'name': filename,
+            'parents': [folder_id]
+        }
 
         file = self.service.files().create(
             body=file_metadata,
@@ -69,6 +84,7 @@ class GoogleDriveRepo:
         ).execute()
 
         return file.get('id')
+
 
     def download_file_to_bytes(self, file_id, decode: bool = False) -> bytes:
         """
@@ -87,7 +103,7 @@ class GoogleDriveRepo:
 
         data = io.BytesIO(fh.read())
         if decode:
-            data = self.cryptography_repo.decrypt_file(io.BytesIO(data))
+            data = self.cryptography_repo.decrypt_file(data)
 
         return data.getvalue()
     
