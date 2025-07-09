@@ -4,25 +4,46 @@ from dotenv import load_dotenv
 from repos.CryptographyRepo import CryptographyRepo
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
-from google.oauth2 import service_account
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.transport.requests import Request
 
 class GoogleDriveRepo:
-    def __init__(self, credentials_json_path: str="Data/config/service_account.json"):
+    SCOPES = ['https://www.googleapis.com/auth/drive']
+
+    def __init__(self, credentials_json_path: str = "Data/config/credentials.json", token_path: str = "Data/config/token.json"):
         """
-        Initialize Google Drive API client with Service Account credentials.
-        
-        :param credentials_json_path: Path to service account JSON key file
-        :param folder_id: ID of the folder in Google Drive where files will be saved
+        Initialize Google Drive API client with OAuth2 user credentials.
+
+        :param credentials_json_path: Path to OAuth client secrets file (credentials.json)
+        :param token_path: Path to store user's access and refresh tokens (token.json)
         """
         load_dotenv()
         self.cryptography_repo = CryptographyRepo(password=os.getenv('MASTER_KEY'))
 
-        scopes = ['https://www.googleapis.com/auth/drive']
-        credentials = service_account.Credentials.from_service_account_file(
-            credentials_json_path, scopes=scopes)
-        self.service = build('drive', 'v3', credentials=credentials, cache_discovery=False)
+        self.credentials_json_path = credentials_json_path
+        self.token_path = token_path
+        self.creds = None
 
-    def upload_file_from_bytes(self, file_bytes: io.BytesIO, filename: str, folder_id: str, encode: bool=False, mime_type: str='application/octet-stream'):
+        self._authenticate()
+        self.service = build('drive', 'v3', credentials=self.creds, cache_discovery=False)
+
+    def _authenticate(self):
+        """Authenticate the user via OAuth2, refreshing or generating tokens as needed."""
+        if os.path.exists(self.token_path):
+            self.creds = Credentials.from_authorized_user_file(self.token_path, self.SCOPES)
+        # If no valid creds or expired, refresh or login again
+        if not self.creds or not self.creds.valid:
+            if self.creds and self.creds.expired and self.creds.refresh_token:
+                self.creds.refresh(Request())
+            else:
+                flow = InstalledAppFlow.from_client_secrets_file(self.credentials_json_path, self.SCOPES)
+                self.creds = flow.run_local_server(port=0)
+            # Save creds for next time
+            with open(self.token_path, 'w') as token_file:
+                token_file.write(self.creds.to_json())
+
+    def upload_file_from_bytes(self, file_bytes: io.BytesIO, filename: str, folder_id: str, encode: bool = False, mime_type: str = 'application/octet-stream'):
         """
         Upload a file directly from bytes with a given filename and MIME type.
 
@@ -49,7 +70,7 @@ class GoogleDriveRepo:
 
         return file.get('id')
 
-    def download_file_to_bytes(self, file_id, decode: bool=False) -> bytes:
+    def download_file_to_bytes(self, file_id, decode: bool = False) -> bytes:
         """
         Downloads a file from Google Drive by its ID and returns bytes.
 
@@ -76,7 +97,6 @@ class GoogleDriveRepo:
 
         :param folder_id: ID of the Google Drive folder
         """
-        # Find all files in the folder
         query = f"'{folder_id}' in parents and trashed = false"
         results = self.service.files().list(
             q=query,
@@ -91,6 +111,6 @@ class GoogleDriveRepo:
             file_ids[file['name']] = file['id']
 
         return file_ids
-    
+
     def delete_file(self, file_id: str):
         self.service.files().delete(fileId=file_id).execute()

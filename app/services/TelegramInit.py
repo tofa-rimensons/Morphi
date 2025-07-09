@@ -1,7 +1,9 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Updater, CommandHandler, PicklePersistence, CallbackQueryHandler, CallbackContext, ApplicationBuilder, MessageHandler, filters, ContextTypes
+from telegram.request import HTTPXRequest
 import os
 import io
+from pydub import AudioSegment
 import datetime
 import json
 import time
@@ -9,6 +11,11 @@ from repos.GoogleDriveRepo import GoogleDriveRepo
 from repos.DBRepo import DBRepo
 import logging
 import subprocess
+
+
+# Example: increase read timeout to 60 seconds
+request = HTTPXRequest(read_timeout=30)
+
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
@@ -465,7 +472,8 @@ Latest Measurement: {last_measurement}
         if current_screen != 'voiceFragment':
             await self.incorrect_input_warning(update, "*Incorrect format*\n(Send audio only)")
             return
-        
+
+        # Get audio file ID
         if update.message.voice:
             file_id = update.message.voice.file_id
         elif update.message.audio:
@@ -476,31 +484,34 @@ Latest Measurement: {last_measurement}
             await self.incorrect_input_warning(update, "*Incorrect format*\n(Send audio only)")
             return
 
-        # Get the file
+        # Download the file into memory
         telegram_file = await context.bot.get_file(file_id)
         file_bytes = io.BytesIO()
         await telegram_file.download_to_memory(out=file_bytes)
         file_bytes.seek(0)
 
-        # Convert to MP3 bytes using ffmpeg
+        # Convert to MP3 using pydub
+        ogg_audio = AudioSegment.from_file(file_bytes, format="ogg")
+
         mp3_bytes = io.BytesIO()
-        process = subprocess.run(
-            ['ffmpeg', '-i', 'pipe:0', '-f', 'mp3', 'pipe:1'],
-            input=file_bytes.read(),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
-        )
-        mp3_bytes.write(process.stdout)
+        ogg_audio.export(mp3_bytes, format="mp3")
         mp3_bytes.seek(0)
 
+        # Upload to Google Drive
         filename = str(int(time.time()))
-        url = self.google_drive.upload_file_from_bytes(file_bytes=mp3_bytes, filename=filename, folder_id=self.vocals_folder, encode=True)
+        url = self.google_drive.upload_file_from_bytes(
+            file_bytes=mp3_bytes,
+            filename=filename,
+            folder_id=self.vocals_folder,
+            encode=True
+        )
 
+        # Save measurement in DB
         col_name = self.measurement_to_unit_names[current_screen]
         user_id = update.effective_user.id
         last_measurement = self.database.get_last_measurement(user_id)
         if last_measurement:
-            last_url = last_measurement[col_name]
+            last_url = last_measurement.get(col_name)
             if last_url:
                 self.google_drive.delete_file(last_url)
 
@@ -513,27 +524,33 @@ Latest Measurement: {last_measurement}
             await self.incorrect_input_warning(update, "*Incorrect format*\n(Send image only)")
             return
         
-        image_data = io.BytesIO()
+        image_bytes = io.BytesIO()
 
         if update.message.photo:
             # Pick largest photo size
             photo = update.message.photo[-1]
             file = await context.bot.get_file(photo.file_id)
-            await file.download_to_memory(out=image_data)
+            await file.download_to_memory(out=image_bytes)
 
         elif update.message.document and update.message.document.mime_type.startswith('image/'):
             # Image sent as document
             file = await context.bot.get_file(update.message.document.file_id)
-            await file.download_to_memory(out=image_data)
+            await file.download_to_memory(out=image_bytes)
 
         else:
             await self.incorrect_input_warning(update, "*Incorrect format*\n(Send image only)")
             return
 
-        image_data.seek(0)
+        image_bytes.seek(0)
 
         filename = str(int(time.time()))
-        url = self.google_drive.upload_file_from_bytes(file_bytes=image_data, filename=filename, folder_id=self.vocals_folder, encode=True)
+        url = self.google_drive.upload_file_from_bytes(
+            file_bytes=image_bytes,
+            filename=filename,
+            folder_id=self.image_folder,
+            encode=True
+        )
+
 
         col_name = self.measurement_to_unit_names[current_screen]
         user_id = update.effective_user.id

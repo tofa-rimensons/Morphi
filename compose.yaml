@@ -4,4 +4,5 @@ services:
     env_file:
       - .env
     volumes:
-      - ./service_account.json:/app/Data/config/service_account.json:ro
+      - ./OAuth/credentials.json:/app/Data/config/credentials.json
+      - ./OAuth/token.json:/app/Data/config/token.json
