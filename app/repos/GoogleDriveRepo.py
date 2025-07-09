@@ -90,6 +90,11 @@ class GoogleDriveRepo:
             data = self.cryptography_repo.decrypt_file(io.BytesIO(data))
 
         return data.getvalue()
+    
+    def get_filename(self, file_id):
+        metadata = self.service.files().get(fileId=file_id, fields="name").execute()
+        file_name = metadata.get('name', f'{file_id}')
+        return file_name
 
     def get_files_in_folder(self, folder_id: str) -> dict:
         """

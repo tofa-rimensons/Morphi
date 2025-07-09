@@ -43,9 +43,9 @@ class DBRepo:
                     hrt_dose_mg REAL,
                     weight_kg REAL,
                     height_cm REAL,
-                    bonemass_prc REAL,
-                    fat_prc REAL,
-                    muscle_prc REAL,
+                    bonemass_pct REAL,
+                    fat_pct REAL,
+                    muscle_pct REAL,
                     chest_cm REAL,
                     bust_cm REAL,
                     waist_cm REAL,
@@ -136,7 +136,7 @@ class DBRepo:
         # Validate keys for measurement table
         allowed_measurement_fields = {
             'hrt_type', 'hrt_dose_mg', 'weight_kg', 'height_cm',
-            'bonemass_prc', 'fat_prc', 'muscle_prc',
+            'bonemass_pct', 'fat_pct', 'muscle_pct',
             'chest_cm', 'bust_cm', 'waist_cm', 'hip_cm', 'thigh_cm',
             'systolic_mmhg', 'diastolic_mmhg', 'heartRate_bpm',
             'physicalSelfEsteem', 'menthalSelfEsteem', 'libidoSelfEsteem',
@@ -182,13 +182,75 @@ class DBRepo:
 
 
     def get_measurements_df(self, user_id):
-        user_id = self.cryptography_repo.encrypt_int(user_id)
-        query = """
-            SELECT * FROM measurements
+        """
+        Returns a DataFrame of all measurement rows for the user,
+        excluding 'user_id' and any URL columns (ending with '_url').
+        """
+        encrypted_user_id = self.cryptography_repo.encrypt_int(user_id)
+
+        # Get all column names from measurements table
+        cursor = self.conn.execute("PRAGMA table_info(measurements)")
+        all_columns = [row[1] for row in cursor.fetchall()]
+
+        # Exclude user_id and URL columns
+        selected_columns = [
+            col for col in all_columns
+            if col != 'user_id' and not col.endswith('_url')
+        ]
+
+        columns_str = ", ".join(selected_columns)
+
+        query = f"""
+            SELECT {columns_str}
+            FROM measurements
             WHERE user_id = ?
             ORDER BY timestamp DESC
         """
-        return pd.read_sql_query(query, self.conn, params=(user_id,))
+
+        return pd.read_sql_query(query, self.conn, params=(encrypted_user_id,))
+
+    
+    def get_measurement_values(self, user_id: int, col_name_list: list[str]) -> list:
+        """
+        Returns a flat list of all non-null values for the given columns,
+        for the specified user, ordered by timestamp descending.
+        """
+
+        allowed_measurement_fields = {
+            'hrt_type', 'hrt_dose_mg', 'weight_kg', 'height_cm',
+            'bonemass_pct', 'fat_pct', 'muscle_pct',
+            'chest_cm', 'bust_cm', 'waist_cm', 'hip_cm', 'thigh_cm',
+            'systolic_mmhg', 'diastolic_mmhg', 'heartRate_bpm',
+            'physicalSelfEsteem', 'menthalSelfEsteem', 'libidoSelfEsteem',
+            'voiceFragment_url', 'photoBody_url', 'photoFace_url'
+        }
+
+        for col in col_name_list:
+            if col not in allowed_measurement_fields:
+                raise ValueError(f"Invalid measurement field: {col}")
+
+        encrypted_user_id = self.cryptography_repo.encrypt_int(user_id)
+
+        # Build query: SELECT timestamp, col1, col2, ...
+        columns_str = ", ".join(col_name_list)
+        query = f"""
+            SELECT timestamp, {columns_str}
+            FROM measurements
+            WHERE user_id = ?
+            ORDER BY timestamp DESC
+        """
+
+        cursor = self.conn.execute(query, (encrypted_user_id,))
+
+        # Flatten: keep values by timestamp order, all non-null values
+        results = []
+        for row in cursor.fetchall():
+            # row[0] is timestamp, row[1:] are the values
+            values = row[1:]
+            results.extend([v for v in values if v is not None])
+
+        return results
+
     
     def get_last_measurement(self, user_id: int) -> dict | None:
         encrypted_user_id = self.cryptography_repo.encrypt_int(user_id)
@@ -293,9 +355,9 @@ class DBRepo:
         measurement_intervals = {
             'weight_kg': user_data.get('weight_interval'),
             'height_cm': user_data.get('height_interval'),
-            'bonemass_prc': user_data.get('bonemassFatMuscle_interval'),
-            'fat_prc': user_data.get('bonemassFatMuscle_interval'),
-            'muscle_prc': user_data.get('bonemassFatMuscle_interval'),
+            'bonemass_pct': user_data.get('bonemassFatMuscle_interval'),
+            'fat_pct': user_data.get('bonemassFatMuscle_interval'),
+            'muscle_pct': user_data.get('bonemassFatMuscle_interval'),
             'chest_cm': user_data.get('chestBustWaistHipThigh_interval'),
             'bust_cm': user_data.get('chestBustWaistHipThigh_interval'),
             'waist_cm': user_data.get('chestBustWaistHipThigh_interval'),

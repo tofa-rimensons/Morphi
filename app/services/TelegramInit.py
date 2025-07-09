@@ -10,7 +10,7 @@ import time
 from repos.GoogleDriveRepo import GoogleDriveRepo
 from repos.DBRepo import DBRepo
 import logging
-import subprocess
+from services.DownloaderService import DownloaderService
 
 
 # Example: increase read timeout to 60 seconds
@@ -106,9 +106,12 @@ class ActionManager:
         self.database = DBRepo()
         self.google_drive = GoogleDriveRepo()
         self.screen_manager = ScreenManager()
+        self.downloader = DownloaderService()
 
         self.image_folder = os.getenv('IMAGE_FOLDER')
         self.vocals_folder = os.getenv('VOCALS_FOLDER')
+
+        self.max_zip_size = 200*1024*1024
 
         with open("Data/config/screens.json", 'r') as f:
             self.screen_config = json.load(f)
@@ -130,9 +133,9 @@ class ActionManager:
         self.measurement_to_unit_names = {
             'weight': 'weight_kg',
             'height': 'height_cm',
-            'bonemass': 'bonemass_prc',
-            'fat': 'fat_prc',
-            'muscle': 'muscle_prc',
+            'bonemass': 'bonemass_pct',
+            'fat': 'fat_pct',
+            'muscle': 'muscle_pct',
             'chest': 'chest_cm',
             'bust': 'bust_cm',
             'waist': 'waist_cm',
@@ -167,7 +170,10 @@ class ActionManager:
             "measurementSeqNext": self.measurementSeqNext,
             "measurementSeqSetText": self.measurementSeqSetText,
             "measurementSeqSetVoice": self.measurementSeqSetVoice,
-            "measurementSeqSetImage": self.measurementSeqSetImage
+            "measurementSeqSetImage": self.measurementSeqSetImage,
+            "downloadImages": self.downloadImages,
+            "downloadVocals": self.downloadVocals,
+            "downloadDatabase": self.downloadDatabase
         }
 
     async def call_action(self, update: Update, context: CallbackContext, action: str):
@@ -195,12 +201,38 @@ class ActionManager:
         text, image_url, buttons, callbacks = self.get_screen_data(screen_name)
         await self.screen_manager.send_screen(update, context, screen_name=screen_name, text=text, image_url=image_url, buttons=buttons, callbacks=callbacks)
 
+    async def downloadZip(self, update: Update, context: CallbackContext, col_name_list: list[str], zip_name: str, file_extension: str):
+        await self.load_screen(update, context, screen_name='download')
+
+        if context.user_data.get('is_downloading'):
+            await self.load_screen(update, context, screen_name='downloadInProgress')
+            return
+
+        context.user_data['is_downloading'] = True
+
+        try:
+
+            user_id = update.effective_user.id
+            file_ids = self.database.get_measurement_values(user_id, col_name_list=col_name_list)
+
+            zip_bytes = self.downloader.download_files_as_zip(zip_filename=f"{zip_name}_{user_id}.zip", 
+                                                            file_ids=file_ids, decode=True, file_extension=file_extension, 
+                                                            max_zip_size=self.max_zip_size)
+            await context.bot.send_document(
+                chat_id=update.effective_chat.id,
+                document=zip_bytes
+            )
+
+            await self.load_screen(update, context, screen_name='downloadComplete')
+        finally:
+            context.user_data['is_downloading'] = False
 
     async def incorrect_input_warning(self, update: Update, info: str):
         text, _, _, _ = self.get_screen_data('incorrectInputWarning')
         text = self.screen_manager.escape_markdown(text+info)
         await update.message.reply_text(text=text, parse_mode='MarkdownV2')
     
+
     async def settings(self, update: Update, context: CallbackContext):
         text, image_url, buttons, callbacks = self.get_screen_data('settings')
         user_data = self.get_user_data(update)
@@ -317,6 +349,8 @@ Current Interval: *{master_interval} days*
         interval_key = f'{current_measurement}_interval'
         interval_value = user_data.get(interval_key)
         value_to_display = f"every {interval_value} measurement(s)" if interval_value else 'no'
+        if value_to_display == 'prc':
+            value_to_display = '%'
         
         dynamic_text = f'''
 *{self.measurement_to_human_names[current_measurement]}:*
@@ -498,7 +532,7 @@ Latest Measurement: {last_measurement}
         mp3_bytes.seek(0)
 
         # Upload to Google Drive
-        filename = str(int(time.time()))
+        filename = f"{current_screen}_{str(int(time.time()))}"
         url = self.google_drive.upload_file_from_bytes(
             file_bytes=mp3_bytes,
             filename=filename,
@@ -543,7 +577,7 @@ Latest Measurement: {last_measurement}
 
         image_bytes.seek(0)
 
-        filename = str(int(time.time()))
+        filename = f"{current_screen}_{str(int(time.time()))}"
         url = self.google_drive.upload_file_from_bytes(
             file_bytes=image_bytes,
             filename=filename,
@@ -563,7 +597,44 @@ Latest Measurement: {last_measurement}
         self.database.save_measurement(user_id, **{col_name: url})
         await self.measurementSeq(update, context)
 
+    async def downloadImages(self, update: Update, context: CallbackContext):
+        await self.downloadZip(update, context, 
+                               col_name_list=['photoBody_url', 'photoFace_url'],
+                               zip_name='images',
+                               file_extension='.jpg')
 
+    async def downloadVocals(self, update: Update, context: CallbackContext):
+        await self.downloadZip(update, context, 
+                               col_name_list=['voiceFragment_url'],
+                               zip_name='voiceFragments',
+                               file_extension='.mp3')
+
+    async def downloadDatabase(self, update: Update, context: CallbackContext):
+        await self.load_screen(update, context, screen_name='download')
+
+        if context.user_data.get('is_downloading'):
+            await self.load_screen(update, context, screen_name='downloadInProgress')
+            return
+
+        context.user_data['is_downloading'] = True
+
+        try:
+
+            user_id = update.effective_user.id
+            measurement_df = self.database.get_measurements_df(user_id)
+
+            zip_bytes = self.downloader.dataframe_to_zip_bytes(df=measurement_df, csv_filename="measurementData.csv", zip_filename=f"measurementData_{user_id}.zip")
+            await context.bot.send_document(
+                chat_id=update.effective_chat.id,
+                document=zip_bytes
+            )
+
+            await self.load_screen(update, context, screen_name='downloadComplete')
+            context.user_data['is_downloading'] = False
+
+        finally:
+            context.user_data['is_downloading'] = False
+        
 
 
 class HandlerManager:
@@ -601,18 +672,24 @@ class HandlerManager:
 
     async def text_message_handler(self, update: Update, context: CallbackContext):
         current_screen = context.user_data.get('current_screen').split('_')[0]
+        if not current_screen:
+            return
         if current_screen in list(self.text_input_funcs.keys()):
             await self.action.call_action(update=update, context=context, action=self.text_input_funcs[current_screen])
 
 
     async def voice_message_handler(self, update: Update, context: CallbackContext):
         current_screen = context.user_data.get('current_screen').split('_')[0]
+        if not current_screen:
+            return
         if current_screen in list(self.voice_input_funcs.keys()):
             await self.action.call_action(update=update, context=context, action=self.voice_input_funcs[current_screen])
 
 
     async def image_message_handler(self, update: Update, context: CallbackContext):
         current_screen = context.user_data.get('current_screen').split('_')[0]
+        if not current_screen:
+            return
         if current_screen in list(self.image_input_funcs.keys()):
             await self.action.call_action(update=update, context=context, action=self.image_input_funcs[current_screen])
 
@@ -627,6 +704,10 @@ class BotManager:
         token = os.getenv('TG_TOKEN')
         persistence = PicklePersistence(filepath='Data/database/bot_data.pkl')
         app = ApplicationBuilder().token(token).persistence(persistence).build()
+
+        if app.persistence.user_data:
+            for user_id, user_data in app.persistence.user_data.items():
+                user_data['is_downloading'] = False
 
         app.add_handler(CommandHandler("start", self.handler.start))
 
