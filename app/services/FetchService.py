@@ -23,7 +23,7 @@ class FetchService:
 
     def fetch_all(self):
         folders_to_setup = [
-            (self.db_folder, "Data/database/"),
+            # (self.db_folder, "Data/database/"),
             (self.config_folder, "Data/config/"),
             (self.log_folder, "Data/logs/")
         ]

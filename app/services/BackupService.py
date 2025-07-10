@@ -4,7 +4,7 @@ import os
 import io
 
 class BackupService:
-    def __init__(self, log, interval):
+    def __init__(self, log, interval=0):
         self.log = log
         self.interval = interval
         self.drive_repo = GoogleDriveRepo()
@@ -48,8 +48,9 @@ class BackupService:
         self.log.info(f"Backup is finished in {time.time()-start_timestamp:.4f} secconds!")
 
     def run(self):
-        while True:
-            time.sleep(self.interval)
-            self.push_all()
+        if self.interval > 0:
+            while True:
+                time.sleep(self.interval)
+                self.push_all()
 
         

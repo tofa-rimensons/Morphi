@@ -3,6 +3,7 @@ import os
 import pandas as pd
 from datetime import datetime, timedelta
 from repos.CryptographyRepo import CryptographyRepo
+import time
 
 class DBRepo:
     def __init__(self, db_path='Data/database/database.db'):
@@ -323,6 +324,26 @@ class DBRepo:
         # Fetch columns names from cursor description
         columns = [desc[0] for desc in cursor.description]
         return dict(zip(columns, result)) if result else None
+
+    def users_to_broadcast(self) -> list[int]:
+        now_ts = int(time.time())
+        
+        query = """
+            SELECT u.user_id, u.master_interval,
+                MAX(m.timestamp) as last_measurement_ts
+            FROM users u
+            LEFT JOIN measurements m ON u.user_id = m.user_id
+            GROUP BY u.user_id
+            HAVING last_measurement_ts IS NULL OR last_measurement_ts < (? - u.master_interval * 24 * 60 * 60)
+        """
+
+        cursor = self.conn.execute(query, (now_ts,))
+        encrypted_user_ids = [row[0] for row in cursor.fetchall() if row[1] and row[1] > 0]
+
+        # Decrypt user_ids
+        decrypted_user_ids = [self.cryptography_repo.decrypt_int(uid) for uid in encrypted_user_ids]
+
+        return decrypted_user_ids
 
     def delete_user_data(self, user_id: int):
         encrypted_user_id = self.cryptography_repo.encrypt_int(user_id)

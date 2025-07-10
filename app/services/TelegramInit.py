@@ -1,6 +1,10 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Updater, CommandHandler, PicklePersistence, CallbackQueryHandler, CallbackContext, ApplicationBuilder, MessageHandler, filters, ContextTypes
 from telegram.request import HTTPXRequest
+from services.BackupService import BackupService
+from apscheduler.schedulers.background import BackgroundScheduler
+from functools import partial
+from types import SimpleNamespace
 import os
 import io
 from pydub import AudioSegment
@@ -11,6 +15,7 @@ from repos.GoogleDriveRepo import GoogleDriveRepo
 from repos.DBRepo import DBRepo
 import logging
 from services.DownloaderService import DownloaderService
+import asyncio
 
 
 # Example: increase read timeout to 60 seconds
@@ -34,24 +39,34 @@ class ScreenManager:
             keyboard.append(keyboard_row)
         return InlineKeyboardMarkup(keyboard)
 
-
     @staticmethod
     async def send_screen(
-        update, context,
+        context,
         text,
         image_url: str = "",
         buttons: list = [],
         callbacks: dict = {},
         edit_if_possible: bool = True,
-        screen_name: str = ''
+        screen_name: str = '',
+        update=None,  # Optional
+        chat_id: int = None  # Required if no update
     ):
-        chat_id = update.effective_chat.id
+        # Use chat_id from update or fallback
+        if update:
+            chat_id = update.effective_chat.id
+            last_message = update.effective_message
+        elif chat_id:
+            last_message = None
+        else:
+            raise ValueError("Either `update` or `chat_id` must be provided.")
+
+        # Build markup and clean text
         markup = ScreenManager.build_keyboard(buttons, callbacks)
-        last_message = update.effective_message
         text = ScreenManager.escape_markdown(text)
 
-        if edit_if_possible and last_message and last_message.from_user.id == context.bot.id:
-            if (not image_url) and not getattr(last_message, 'photo', None):
+        # Try editing previous bot message (only if update is available)
+        if update and edit_if_possible and last_message and last_message.from_user.id == context.bot.id:
+            if not image_url and not getattr(last_message, 'photo', None):
                 try:
                     await context.bot.edit_message_text(
                         chat_id=chat_id,
@@ -60,14 +75,13 @@ class ScreenManager:
                         parse_mode='MarkdownV2',
                         reply_markup=markup
                     )
-                    # Store current screen info if needed
                     if screen_name:
                         context.user_data['current_screen'] = screen_name
                     return
                 except Exception:
                     pass  # fallback to sending new if edit fails
 
-        # Otherwise: send new
+        # Otherwise: send new message
         if image_url:
             sent_message = await context.bot.send_photo(
                 chat_id=chat_id,
@@ -84,7 +98,9 @@ class ScreenManager:
                 reply_markup=markup
             )
 
-        if last_message and last_message.from_user.id == context.bot.id and last_message.message_id != sent_message.message_id and edit_if_possible:
+        # Optionally delete last message if it's a bot message
+        if update and last_message and last_message.from_user.id == context.bot.id \
+                and last_message.message_id != sent_message.message_id and edit_if_possible:
             try:
                 await context.bot.delete_message(chat_id=chat_id, message_id=last_message.message_id)
             except Exception:
@@ -92,9 +108,6 @@ class ScreenManager:
 
         if screen_name:
             context.user_data['current_screen'] = screen_name
-
-
-
 
     @staticmethod
     def escape_markdown(text: str) -> str:
@@ -107,6 +120,7 @@ class ActionManager:
         self.google_drive = GoogleDriveRepo()
         self.screen_manager = ScreenManager()
         self.downloader = DownloaderService()
+        self.backuper = BackupService(log=logging)
 
         self.image_folder = os.getenv('IMAGE_FOLDER')
         self.vocals_folder = os.getenv('VOCALS_FOLDER')
@@ -115,6 +129,9 @@ class ActionManager:
 
         with open("Data/config/screens.json", 'r') as f:
             self.screen_config = json.load(f)
+
+        with open("Data/config/config.json", 'r') as f:
+            self.config = json.load(f)
 
         self.measurement_to_human_names = {
             "weight": "Weight",
@@ -173,7 +190,8 @@ class ActionManager:
             "measurementSeqSetImage": self.measurementSeqSetImage,
             "downloadImages": self.downloadImages,
             "downloadVocals": self.downloadVocals,
-            "downloadDatabase": self.downloadDatabase
+            "downloadDatabase": self.downloadDatabase,
+            "admin": self.admin
         }
 
     async def call_action(self, update: Update, context: CallbackContext, action: str):
@@ -199,7 +217,7 @@ class ActionManager:
 
     async def load_screen(self, update: Update, context: CallbackContext, screen_name: str):
         text, image_url, buttons, callbacks = self.get_screen_data(screen_name)
-        await self.screen_manager.send_screen(update, context, screen_name=screen_name, text=text, image_url=image_url, buttons=buttons, callbacks=callbacks)
+        await self.screen_manager.send_screen(update=update, context=context, screen_name=screen_name, text=text, image_url=image_url, buttons=buttons, callbacks=callbacks)
 
     async def downloadZip(self, update: Update, context: CallbackContext, col_name_list: list[str], zip_name: str, file_extension: str):
         await self.load_screen(update, context, screen_name='download')
@@ -237,6 +255,69 @@ class ActionManager:
         text = self.screen_manager.escape_markdown(text+info)
         await update.message.reply_text(text=text, parse_mode='MarkdownV2')
     
+    async def broadcast_screen(self, application=None, screen='broadcast', context=None):
+        text, image_url, buttons, callbacks = self.get_screen_data(screen)
+        user_ids = self.database.users_to_broadcast()  
+
+        logging.info(f"Broadcasting to {len(user_ids)} bunnies with {screen} :3")
+
+        i = 0
+        for user_id in user_ids:
+            try:
+
+                if not context:
+                    # Create minimal fake context
+                    context = SimpleNamespace(
+                        bot=application.bot,
+                        user_data={}  # or preload per-user data if needed
+                    )
+
+                await self.screen_manager.send_screen(
+                    context=context,
+                    chat_id=user_id,
+                    text=text,
+                    image_url=image_url,
+                    buttons=buttons,
+                    callbacks=callbacks,
+                )
+                i += 1
+            except Exception as e:
+                logging.warning(f"Failed to send screen to {user_id}: {e}")
+
+        logging.info(f"{i} heard broadcast!")
+
+    async def admin(self, update: Update, context: CallbackContext):
+        user_id = update.effective_user.id
+        if user_id != self.config["admin_id"]:
+            await self.load_screen(update, context, screen_name='start')
+            return
+
+        callback_query = update.callback_query
+
+        if callback_query:
+            data = callback_query.data.split('_')
+        else:
+            await self.load_screen(update, context, screen_name='admin')
+            return
+
+        if data[-1] == 'reboot':
+            logging.info("Rebooting...")
+            await self.broadcast_screen(screen='reboot', context=context)
+            self.backuper.push_all()
+            os.system("sudo reboot")
+        elif data[-1] == 'rebootSilent':
+            logging.info("Rebooting Silently...")
+            self.backuper.push_all()
+            os.system("sudo reboot")
+
+        elif data[-1] == 'updateScreenConfig':
+            logging.info("Config Updated!")
+            with open("Data/config/screens.json", 'r') as f:
+                self.screen_config = json.load(f)
+        
+        await self.load_screen(update, context, screen_name='admin')
+
+
 
     async def settings(self, update: Update, context: CallbackContext):
         text, image_url, buttons, callbacks = self.get_screen_data('settings')
@@ -263,7 +344,7 @@ Measurement Intervals:
 {chr(10).join(measurement_lines)}
         """
 
-        await self.screen_manager.send_screen(update, context, screen_name='settings', text=text + dynamic_text, image_url=image_url, buttons=buttons, callbacks=callbacks)
+        await self.screen_manager.send_screen(update=update, context=context, screen_name='settings', text=text + dynamic_text, image_url=image_url, buttons=buttons, callbacks=callbacks)
 
     async def hrtInfo(self, update: Update, context: CallbackContext):
         text, image_url, buttons, callbacks = self.get_screen_data('hrtInfo')
@@ -277,7 +358,7 @@ Measurement Intervals:
 HRT Type: *{hrt_type}*
 HRT Dose: *{hrt_dose}*
         """
-        await self.screen_manager.send_screen(update, context, screen_name='hrtInfo', text=text + dynamic_text, image_url=image_url, buttons=buttons, callbacks=callbacks)
+        await self.screen_manager.send_screen(update=update, context=context, screen_name='hrtInfo', text=text + dynamic_text, image_url=image_url, buttons=buttons, callbacks=callbacks)
 
     async def hrtInfoSet(self, update: Update, context: CallbackContext):
         callback_query = update.callback_query
@@ -328,7 +409,7 @@ HRT Dose: *{hrt_dose}*
         dynamic_text = f'''
 Current Interval: *{master_interval} days*
         '''
-        await self.screen_manager.send_screen(update, context, screen_name='masterInterval', text=text+dynamic_text, image_url=image_url, buttons=buttons, callbacks=callbacks)
+        await self.screen_manager.send_screen(update=update, context=context, screen_name='masterInterval', text=text+dynamic_text, image_url=image_url, buttons=buttons, callbacks=callbacks)
 
     async def masterIntervalSet(self, update: Update, context: CallbackContext):
         data = update.callback_query.data
@@ -363,7 +444,7 @@ Current Interval: *{value_to_display}*
         '''
         
         text, image_url, buttons, callbacks = self.get_screen_data('measurementInterval')
-        await self.screen_manager.send_screen(update, context, text=text+dynamic_text, image_url=image_url, buttons=buttons, callbacks=callbacks)
+        await self.screen_manager.send_screen(update=update, context=context, text=text+dynamic_text, image_url=image_url, buttons=buttons, callbacks=callbacks)
 
     async def measurementIntervalSet(self, update: Update, context: CallbackContext):
         data = update.callback_query.data
@@ -402,19 +483,23 @@ Current Interval: *{value_to_display}*
         current_screen = context.user_data.get('current_screen')
         if current_screen != 'deleteUserData':
             text, image_url, buttons, callbacks = self.get_screen_data('deleteUserData')
-            await self.screen_manager.send_screen(update, context, screen_name='deleteUserData', text=text, image_url=image_url, buttons=buttons, callbacks=callbacks)
+            await self.screen_manager.send_screen(update=update, context=context, screen_name='deleteUserData', text=text, image_url=image_url, buttons=buttons, callbacks=callbacks)
             return
         
         text = update.message.text
         if text == 'delete':
             user_id = update.effective_user.id
+            file_ids = self.database.get_measurement_values(user_id, col_name_list=['voiceFragment_url', 'photoBody_url', 'photoFace_url'])
+            for id in file_ids:
+                self.google_drive.delete_file(id)
+
             self.database.delete_user_data(user_id)
             text, image_url, buttons, callbacks = self.get_screen_data('deleteUserDataSuccess')
-            await self.screen_manager.send_screen(update, context, screen_name='deleteUserDataSuccess', text=text, image_url=image_url, buttons=buttons, callbacks=callbacks)
+            await self.screen_manager.send_screen(update=update, context=context, screen_name='deleteUserDataSuccess', text=text, image_url=image_url, buttons=buttons, callbacks=callbacks)
         else:
             failure_text = "\nYou didn't input *'delete'*\nTry again!"
             text, image_url, buttons, callbacks = self.get_screen_data('deleteUserData')
-            await self.screen_manager.send_screen(update, context, screen_name='deleteUserData', text=text+failure_text, image_url=image_url, buttons=buttons, callbacks=callbacks)
+            await self.screen_manager.send_screen(update=update, context=context, screen_name='deleteUserData', text=text+failure_text, image_url=image_url, buttons=buttons, callbacks=callbacks)
         
     async def stats(self, update: Update, context: CallbackContext):
         text, image_url, buttons, callbacks = self.get_screen_data('stats')
@@ -427,7 +512,7 @@ Number Of Measurements: {row_count}
 First Measurement: {first_measurement}
 Latest Measurement: {last_measurement}
         '''
-        await self.screen_manager.send_screen(update, context, screen_name='stats', text=text+dynamic_text, image_url=image_url, buttons=buttons, callbacks=callbacks)
+        await self.screen_manager.send_screen(update=update, context=context, screen_name='stats', text=text+dynamic_text, image_url=image_url, buttons=buttons, callbacks=callbacks)
 
     async def measurementSeq(self, update: Update, context: CallbackContext):
         current_screen = context.user_data.get('current_screen').split('_')
@@ -459,7 +544,7 @@ Latest Measurement: {last_measurement}
         """
             
         text, image_url, buttons, callbacks = self.get_screen_data(current_screen[-1])
-        await self.screen_manager.send_screen(update, context, text=text+dynamic_text, image_url=image_url, buttons=buttons, callbacks=callbacks)
+        await self.screen_manager.send_screen(update=update, context=context, text=text+dynamic_text, image_url=image_url, buttons=buttons, callbacks=callbacks)
 
     async def measurementSeqNext(self, update: Update, context: CallbackContext):
         current_screen = context.user_data.get('current_screen').split('_')[-1]
@@ -649,10 +734,13 @@ Latest Measurement: {last_measurement}
             context.user_data['is_downloading'] = False
         
 
-
 class HandlerManager:
     def __init__(self) -> None:
         self.action = ActionManager()
+
+        with open("Data/config/config.json", 'r') as f:
+            self.config = json.load(f)
+
         self.text_input_funcs = {
             'deleteUserData': 'deleteUserData', 
             'hrtInfoSet': 'hrtInfoSet', 
@@ -709,20 +797,55 @@ class HandlerManager:
     async def start(self, update, context):
         await self.action.load_screen(update=update, context=context, screen_name='start')
 
+    async def settings(self, update, context):
+        user_id = update.effective_user.id
+        if user_id == self.config["admin_id"]:
+            logging.info(f"Admin [{user_id}] in control panel...")
+            await self.action.admin(update=update, context=context)
+        else:
+            await self.action.settings(update=update, context=context)
+
+class Scheduler:
+    def __init__(self):
+        self.actions = ActionManager()
+
+    def start_scheduler(self, bot, loop=None):
+        scheduler = BackgroundScheduler(timezone="Europe/Brussels")
+
+        # Use current event loop or get a new one
+        if loop is None:
+            loop = asyncio.get_event_loop()
+
+        def run_async_broadcast():
+            loop.create_task(self.actions.broadcast_screen(bot, screen='broadcast'))
+
+        # Schedule jobs
+        scheduler.add_job(run_async_broadcast, 'cron', hour=8, minute=0)
+        scheduler.add_job(run_async_broadcast, 'cron', hour=14, minute=0)
+        scheduler.add_job(run_async_broadcast, 'cron', hour=20, minute=0)
+
+        scheduler.start()
+        
 class BotManager:
     def __init__(self):
         self.handler = HandlerManager()
+        self.scheduler = Scheduler()
+
+        self.actions = ActionManager()
         
     def run(self):
         token = os.getenv('TG_TOKEN')
         persistence = PicklePersistence(filepath='Data/database/bot_data.pkl')
         app = ApplicationBuilder().token(token).persistence(persistence).build()
 
+        self.scheduler.start_scheduler(app, loop=asyncio.get_event_loop())
+
         if app.persistence.user_data:
             for user_id, user_data in app.persistence.user_data.items():
                 user_data['is_downloading'] = False
 
         app.add_handler(CommandHandler("start", self.handler.start))
+        app.add_handler(CommandHandler("settings", self.handler.settings))
 
         app.add_handler(MessageHandler(filters.TEXT, self.handler.text_message_handler))
         app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO | filters.Document.AUDIO, self.handler.voice_message_handler))
