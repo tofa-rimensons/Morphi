@@ -344,6 +344,23 @@ class DBRepo:
         decrypted_user_ids = [self.cryptography_repo.decrypt_int(uid) for uid in encrypted_user_ids]
 
         return decrypted_user_ids
+    
+    def get_users(self) -> list[int]:
+        now_ts = int(time.time())
+        
+        query = """
+            SELECT user_id
+            FROM users
+            WHERE master_interval > 0
+        """
+
+        cursor = self.conn.execute(query, (now_ts,))
+        encrypted_user_ids = [row[0] for row in cursor.fetchall()]
+
+        # Decrypt user_ids
+        decrypted_user_ids = [self.cryptography_repo.decrypt_int(uid) for uid in encrypted_user_ids]
+
+        return decrypted_user_ids
 
     def delete_user_data(self, user_id: int):
         encrypted_user_id = self.cryptography_repo.encrypt_int(user_id)

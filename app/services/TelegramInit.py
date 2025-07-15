@@ -15,6 +15,7 @@ from repos.GoogleDriveRepo import GoogleDriveRepo
 from repos.DBRepo import DBRepo
 import logging
 from services.DownloaderService import DownloaderService
+from services.FetchService import FetchService
 import asyncio
 
 
@@ -25,6 +26,7 @@ request = HTTPXRequest(read_timeout=30)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("telegram.bot").setLevel(logging.WARNING)
+logging.getLogger('apscheduler').setLevel(logging.WARNING)
 
 class ScreenManager:
 
@@ -47,7 +49,7 @@ class ScreenManager:
         buttons: list = [],
         callbacks: dict = {},
         edit_if_possible: bool = True,
-        screen_name: str = '',
+        screen: str = '',
         update=None,  # Optional
         chat_id: int = None  # Required if no update
     ):
@@ -75,8 +77,8 @@ class ScreenManager:
                         parse_mode='MarkdownV2',
                         reply_markup=markup
                     )
-                    if screen_name:
-                        context.user_data['current_screen'] = screen_name
+                    if screen:
+                        context.user_data['current_screen'] = screen
                     return
                 except Exception:
                     pass  # fallback to sending new if edit fails
@@ -106,8 +108,8 @@ class ScreenManager:
             except Exception:
                 pass
 
-        if screen_name:
-            context.user_data['current_screen'] = screen_name
+        if screen:
+            context.user_data['current_screen'] = screen
 
     @staticmethod
     def escape_markdown(text: str) -> str:
@@ -121,6 +123,7 @@ class ActionManager:
         self.screen_manager = ScreenManager()
         self.downloader = DownloaderService()
         self.backuper = BackupService(log=logging)
+        self.fetcher = FetchService()
 
         self.image_folder = os.getenv('IMAGE_FOLDER')
         self.vocals_folder = os.getenv('VOCALS_FOLDER')
@@ -197,11 +200,11 @@ class ActionManager:
     async def call_action(self, update: Update, context: CallbackContext, action: str):
         await self.action_methods[action](update, context)
 
-    def get_screen_data(self, screen_name: str):
-        text = self.screen_config[screen_name]["text"]
-        image_url = self.screen_config[screen_name]["image_url"]
-        buttons = self.screen_config[screen_name]["buttons"]
-        callbacks = self.screen_config[screen_name]["callbacks"]
+    def get_screen_data(self, screen: str):
+        text = self.screen_config[screen]["text"]
+        image_url = self.screen_config[screen]["image_url"]
+        buttons = self.screen_config[screen]["buttons"]
+        callbacks = self.screen_config[screen]["callbacks"]
 
         return text, image_url, buttons, callbacks
     
@@ -215,15 +218,15 @@ class ActionManager:
         row_count, first_measurement, last_measurement = self.database.get_measurements_row_count(user_id)
         return row_count, first_measurement, last_measurement
 
-    async def load_screen(self, update: Update, context: CallbackContext, screen_name: str):
-        text, image_url, buttons, callbacks = self.get_screen_data(screen_name)
-        await self.screen_manager.send_screen(update=update, context=context, screen_name=screen_name, text=text, image_url=image_url, buttons=buttons, callbacks=callbacks)
+    async def load_screen(self, update: Update, context: CallbackContext, screen: str):
+        text, image_url, buttons, callbacks = self.get_screen_data(screen)
+        await self.screen_manager.send_screen(update=update, context=context, screen=screen, text=text, image_url=image_url, buttons=buttons, callbacks=callbacks)
 
     async def downloadZip(self, update: Update, context: CallbackContext, col_name_list: list[str], zip_name: str, file_extension: str):
-        await self.load_screen(update, context, screen_name='download')
+        await self.load_screen(update, context, screen='download')
 
         if context.user_data.get('is_downloading'):
-            await self.load_screen(update, context, screen_name='downloadInProgress')
+            await self.load_screen(update, context, screen='downloadInProgress')
             return
 
         context.user_data['is_downloading'] = True
@@ -244,7 +247,7 @@ class ActionManager:
                 chat_id=update.effective_chat.id,
                 document=zip_file
             )
-            await self.load_screen(update, context, screen_name='downloadComplete')
+            await self.load_screen(update, context, screen='downloadComplete')
             
         finally:
             
@@ -255,11 +258,15 @@ class ActionManager:
         text = self.screen_manager.escape_markdown(text+info)
         await update.message.reply_text(text=text, parse_mode='MarkdownV2')
     
-    async def broadcast_screen(self, application=None, screen='broadcast', context=None):
+    async def broadcast_screen(self, application=None, screen='broadcast', context=None, all_users: bool=False):
         text, image_url, buttons, callbacks = self.get_screen_data(screen)
-        user_ids = self.database.users_to_broadcast()  
 
-        logging.info(f"Broadcasting to {len(user_ids)} bunnies with {screen} :3")
+        if all_users:
+            user_ids = self.database.get_users()  
+        else:
+            user_ids = self.database.users_to_broadcast()  
+
+        logging.info(f"Broadcasting to {len(user_ids)} bunnies with [{screen}] :3")
 
         i = 0
         for user_id in user_ids:
@@ -289,33 +296,29 @@ class ActionManager:
     async def admin(self, update: Update, context: CallbackContext):
         user_id = update.effective_user.id
         if user_id != self.config["admin_id"]:
-            await self.load_screen(update, context, screen_name='start')
+            await self.load_screen(update, context, screen='start')
             return
 
         callback_query = update.callback_query
 
-        if callback_query:
+
+        if update.message and (update.message.text in self.screen_config and not update.message.text in self.action_methods):
+            await self.broadcast_screen(context=context, screen=update.message.text, all_users=True)
+            await self.load_screen(update, context, screen='admin')
+            return
+        elif callback_query:
             data = callback_query.data.split('_')
         else:
-            await self.load_screen(update, context, screen_name='admin')
+            await self.load_screen(update, context, screen='admin')
             return
-
-        if data[-1] == 'reboot':
-            logging.info("Rebooting...")
-            await self.broadcast_screen(screen='reboot', context=context)
-            self.backuper.push_all()
-            os.system("sudo reboot")
-        elif data[-1] == 'rebootSilent':
-            logging.info("Rebooting Silently...")
-            self.backuper.push_all()
-            os.system("sudo reboot")
-
-        elif data[-1] == 'updateScreenConfig':
-            logging.info("Config Updated!")
+        
+        if data[-1] == 'updateScreenConfig':
+            self.fetcher.fetch_all()
             with open("Data/config/screens.json", 'r') as f:
                 self.screen_config = json.load(f)
+            logging.info("Config Updated!")
         
-        await self.load_screen(update, context, screen_name='admin')
+        await self.load_screen(update, context, screen='admin')
 
 
 
@@ -344,7 +347,7 @@ Measurement Intervals:
 {chr(10).join(measurement_lines)}
         """
 
-        await self.screen_manager.send_screen(update=update, context=context, screen_name='settings', text=text + dynamic_text, image_url=image_url, buttons=buttons, callbacks=callbacks)
+        await self.screen_manager.send_screen(update=update, context=context, screen='settings', text=text + dynamic_text, image_url=image_url, buttons=buttons, callbacks=callbacks)
 
     async def hrtInfo(self, update: Update, context: CallbackContext):
         text, image_url, buttons, callbacks = self.get_screen_data('hrtInfo')
@@ -358,7 +361,7 @@ Measurement Intervals:
 HRT Type: *{hrt_type}*
 HRT Dose: *{hrt_dose}*
         """
-        await self.screen_manager.send_screen(update=update, context=context, screen_name='hrtInfo', text=text + dynamic_text, image_url=image_url, buttons=buttons, callbacks=callbacks)
+        await self.screen_manager.send_screen(update=update, context=context, screen='hrtInfo', text=text + dynamic_text, image_url=image_url, buttons=buttons, callbacks=callbacks)
 
     async def hrtInfoSet(self, update: Update, context: CallbackContext):
         callback_query = update.callback_query
@@ -371,9 +374,9 @@ HRT Dose: *{hrt_dose}*
                 self.database.set_user_data(user_id, {'hrt_type': 'NULL', 'hrt_dose': 'NULL'})
                 await self.hrtInfo(update, context)
             elif action == 'type':
-                await self.load_screen(update, context, screen_name='hrtInfoType')
+                await self.load_screen(update, context, screen='hrtInfoType')
             elif action == 'dose':
-                await self.load_screen(update, context, screen_name='hrtInfoDose')
+                await self.load_screen(update, context, screen='hrtInfoDose')
 
         else:
             current_screen = context.user_data.get('current_screen')
@@ -409,7 +412,7 @@ HRT Dose: *{hrt_dose}*
         dynamic_text = f'''
 Current Interval: *{master_interval} days*
         '''
-        await self.screen_manager.send_screen(update=update, context=context, screen_name='masterInterval', text=text+dynamic_text, image_url=image_url, buttons=buttons, callbacks=callbacks)
+        await self.screen_manager.send_screen(update=update, context=context, screen='masterInterval', text=text+dynamic_text, image_url=image_url, buttons=buttons, callbacks=callbacks)
 
     async def masterIntervalSet(self, update: Update, context: CallbackContext):
         data = update.callback_query.data
@@ -483,7 +486,7 @@ Current Interval: *{value_to_display}*
         current_screen = context.user_data.get('current_screen')
         if current_screen != 'deleteUserData':
             text, image_url, buttons, callbacks = self.get_screen_data('deleteUserData')
-            await self.screen_manager.send_screen(update=update, context=context, screen_name='deleteUserData', text=text, image_url=image_url, buttons=buttons, callbacks=callbacks)
+            await self.screen_manager.send_screen(update=update, context=context, screen='deleteUserData', text=text, image_url=image_url, buttons=buttons, callbacks=callbacks)
             return
         
         text = update.message.text
@@ -495,11 +498,11 @@ Current Interval: *{value_to_display}*
 
             self.database.delete_user_data(user_id)
             text, image_url, buttons, callbacks = self.get_screen_data('deleteUserDataSuccess')
-            await self.screen_manager.send_screen(update=update, context=context, screen_name='deleteUserDataSuccess', text=text, image_url=image_url, buttons=buttons, callbacks=callbacks)
+            await self.screen_manager.send_screen(update=update, context=context, screen='deleteUserDataSuccess', text=text, image_url=image_url, buttons=buttons, callbacks=callbacks)
         else:
             failure_text = "\nYou didn't input *'delete'*\nTry again!"
             text, image_url, buttons, callbacks = self.get_screen_data('deleteUserData')
-            await self.screen_manager.send_screen(update=update, context=context, screen_name='deleteUserData', text=text+failure_text, image_url=image_url, buttons=buttons, callbacks=callbacks)
+            await self.screen_manager.send_screen(update=update, context=context, screen='deleteUserData', text=text+failure_text, image_url=image_url, buttons=buttons, callbacks=callbacks)
         
     async def stats(self, update: Update, context: CallbackContext):
         text, image_url, buttons, callbacks = self.get_screen_data('stats')
@@ -512,9 +515,9 @@ Number Of Measurements: {row_count}
 First Measurement: {first_measurement}
 Latest Measurement: {last_measurement}
         '''
-        await self.screen_manager.send_screen(update=update, context=context, screen_name='stats', text=text+dynamic_text, image_url=image_url, buttons=buttons, callbacks=callbacks)
+        await self.screen_manager.send_screen(update=update, context=context, screen='stats', text=text+dynamic_text, image_url=image_url, buttons=buttons, callbacks=callbacks)
 
-    async def measurementSeq(self, update: Update, context: CallbackContext):
+    async def measurementSeq(self, update: Update, context: CallbackContext, is_last: bool=False):
         current_screen = context.user_data.get('current_screen').split('_')
         callback_query = update.callback_query
         if current_screen[-1] not in list(self.measurement_to_unit_names.keys()):
@@ -544,6 +547,8 @@ Latest Measurement: {last_measurement}
         """
             
         text, image_url, buttons, callbacks = self.get_screen_data(current_screen[-1])
+
+        buttons = [buttons[-1] if is_last else buttons[0]]
         await self.screen_manager.send_screen(update=update, context=context, text=text+dynamic_text, image_url=image_url, buttons=buttons, callbacks=callbacks)
 
     async def measurementSeqNext(self, update: Update, context: CallbackContext):
@@ -556,12 +561,19 @@ Latest Measurement: {last_measurement}
             num_screens = len(all_screens)
             if i < num_screens:
                 next_measurement = all_screens[i]
+            else:
+                next_measurement = all_screens[-1]
+
+            if i >= num_screens-1:
+                is_last = True
+            else:
+                is_last = False
         else:
-            await self.load_screen(update, context, screen_name='noToMeasure')
+            await self.load_screen(update, context, screen='noToMeasure')
             return
 
         context.user_data['current_screen'] = 'measurementSeq_'+next_measurement
-        await self.measurementSeq(update, context)
+        await self.measurementSeq(update, context, is_last)
 
     async def measurementSeqSetText(self, update: Update, context: CallbackContext):
         current_screen = context.user_data.get('current_screen').split('_')[-1]
@@ -700,10 +712,10 @@ Latest Measurement: {last_measurement}
                                file_extension='.mp3')
 
     async def downloadDatabase(self, update: Update, context: CallbackContext):
-        await self.load_screen(update, context, screen_name='download')
+        await self.load_screen(update, context, screen='download')
 
         if context.user_data.get('is_downloading'):
-            await self.load_screen(update, context, screen_name='downloadInProgress')
+            await self.load_screen(update, context, screen='downloadInProgress')
             return
 
         context.user_data['is_downloading'] = True
@@ -727,7 +739,7 @@ Latest Measurement: {last_measurement}
                 document=zip_file
             )
 
-            await self.load_screen(update, context, screen_name='downloadComplete')
+            await self.load_screen(update, context, screen='downloadComplete')
             context.user_data['is_downloading'] = False
 
         finally:
@@ -746,7 +758,8 @@ class HandlerManager:
             'hrtInfoSet': 'hrtInfoSet', 
             'hrtInfoType': 'hrtInfoType', 
             'hrtInfoDose': 'hrtInfoDose', 
-            'measurementSeq':'measurementSeqSetText'
+            'measurementSeq':'measurementSeqSetText',
+            'admin': 'admin'
             }
         
         self.voice_input_funcs = {
@@ -764,8 +777,8 @@ class HandlerManager:
         data = query.data
 
         if data[:3] == 'scr':
-            screen_name = data.split("_")[1]
-            await self.action.load_screen(update=update, context=context, screen_name=screen_name)
+            screen = data.split("_")[1]
+            await self.action.load_screen(update=update, context=context, screen=screen)
         elif data[:3] == 'cmd':
             action = data.split("_")[1]
             await self.action.call_action(update=update, context=context, action=action)
@@ -795,7 +808,7 @@ class HandlerManager:
             await self.action.call_action(update=update, context=context, action=self.image_input_funcs[current_screen])
 
     async def start(self, update, context):
-        await self.action.load_screen(update=update, context=context, screen_name='start')
+        await self.action.load_screen(update=update, context=context, screen='start')
 
     async def settings(self, update, context):
         user_id = update.effective_user.id

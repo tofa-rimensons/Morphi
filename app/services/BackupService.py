@@ -19,10 +19,9 @@ class BackupService:
         files_to_delete = self.drive_repo.get_files_in_folder(folder_id)
 
         for file in files_to_push:
-            file_path = f"{local_folder_path}/{file}"
-            last_change_timestamp = os.path.getmtime(file_path)
-            if current_time - last_change_timestamp > self.interval:
+            if file == '.gitkeep':
                 continue
+            file_path = f"{local_folder_path}/{file}"
 
             with open(file_path, 'rb') as f:
                 data = f.read()
