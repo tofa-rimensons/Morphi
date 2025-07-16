@@ -19,7 +19,7 @@ class BackupService:
         files_to_delete = self.drive_repo.get_files_in_folder(folder_id)
 
         for file in files_to_push:
-            if file == '.gitkeep':
+            if file in ['.gitkeep', 'credentials.json', 'token.json']:
                 continue
             file_path = f"{local_folder_path}/{file}"
 

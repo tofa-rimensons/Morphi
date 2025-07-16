@@ -37,8 +37,11 @@ class GoogleDriveRepo:
             if self.creds and self.creds.expired and self.creds.refresh_token:
                 self.creds.refresh(Request())
             else:
-                flow = InstalledAppFlow.from_client_secrets_file(self.credentials_json_path, self.SCOPES)
-                self.creds = flow.run_local_server(port=0)
+                flow = InstalledAppFlow.from_client_secrets_file(
+                    self.credentials_json_path,
+                    self.SCOPES
+                )
+                self.creds = flow.run_local_server(port=0, access_type='offline', prompt='consent')
             # Save creds for next time
             with open(self.token_path, 'w') as token_file:
                 token_file.write(self.creds.to_json())
