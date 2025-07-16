@@ -333,6 +333,7 @@ class DBRepo:
                 MAX(m.timestamp) as last_measurement_ts
             FROM users u
             LEFT JOIN measurements m ON u.user_id = m.user_id
+            WHERE u.master_interval > 0
             GROUP BY u.user_id
             HAVING last_measurement_ts IS NULL OR last_measurement_ts < (? - u.master_interval * 24 * 60 * 60)
         """
@@ -345,16 +346,14 @@ class DBRepo:
 
         return decrypted_user_ids
     
-    def get_users(self) -> list[int]:
-        now_ts = int(time.time())
-        
+    def get_users(self) -> list[int]:        
         query = """
             SELECT user_id
             FROM users
             WHERE master_interval > 0
         """
 
-        cursor = self.conn.execute(query, (now_ts,))
+        cursor = self.conn.execute(query)
         encrypted_user_ids = [row[0] for row in cursor.fetchall()]
 
         # Decrypt user_ids

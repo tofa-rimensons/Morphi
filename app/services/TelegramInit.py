@@ -335,7 +335,7 @@ class ActionManager:
         measurement_lines = []
         for key, display_name in self.measurement_to_human_names.items():
             interval = user_data.get(f"{key}_interval")
-            interval_text = f"every {interval} measurement(s)" if interval else "no"
+            interval_text = f"{interval}" if interval else "no"
             measurement_lines.append(f"{display_name}: *{interval_text}*")
 
         dynamic_text = f"""
@@ -407,10 +407,10 @@ HRT Dose: *{hrt_dose}*
         text, image_url, buttons, callbacks = self.get_screen_data('masterInterval')
         user_data = self.get_user_data(update)
 
-        master_interval = user_data['master_interval'] if user_data['master_interval'] else 0
+        master_interval = f"{user_data['master_interval']} days" if user_data['master_interval'] and user_data['master_interval'] >= 0 else 'no'
 
         dynamic_text = f'''
-Current Interval: *{master_interval} days*
+Current Interval: *{master_interval}*
         '''
         await self.screen_manager.send_screen(update=update, context=context, screen='masterInterval', text=text+dynamic_text, image_url=image_url, buttons=buttons, callbacks=callbacks)
 
@@ -606,7 +606,7 @@ Latest Measurement: {last_measurement}
         current_screen = context.user_data.get('current_screen').split('_')[-1]
         print(current_screen)
         if current_screen != 'voiceFragment':
-            await self.incorrect_input_warning(update, "*Incorrect format*\n(Send audio only)")
+            await self.incorrect_input_warning(update, "*Incorrect format*")
             return
 
         # Get audio file ID
@@ -657,7 +657,7 @@ Latest Measurement: {last_measurement}
     async def measurementSeqSetImage(self, update: Update, context: CallbackContext):
         current_screen = context.user_data.get('current_screen').split('_')[-1]
         if current_screen not in ['photoBody', 'photoFace']:
-            await self.incorrect_input_warning(update, "*Incorrect format*\n(Send image only)")
+            await self.incorrect_input_warning(update, "*Incorrect format*")
             return
         
         image_bytes = io.BytesIO()
