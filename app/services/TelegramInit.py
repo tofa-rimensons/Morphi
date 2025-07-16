@@ -627,7 +627,7 @@ Latest Measurement: {last_measurement}
         file_bytes.seek(0)
 
         # Convert to MP3 using pydub
-        ogg_audio = AudioSegment.from_file(file_bytes, format="ogg")
+        ogg_audio = AudioSegment.from_file(file_bytes, format="ogg")[:30000]
 
         mp3_bytes = io.BytesIO()
         ogg_audio.export(mp3_bytes, format="mp3")
@@ -789,6 +789,9 @@ class HandlerManager:
         if not current_screen:
             return
         if current_screen in list(self.text_input_funcs.keys()):
+            text = update.message.text
+            if len(text) > 100:
+                await self.incorrect_input_warning(update, "*Too long*")
             await self.action.call_action(update=update, context=context, action=self.text_input_funcs[current_screen])
 
 

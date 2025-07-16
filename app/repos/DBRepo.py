@@ -40,7 +40,7 @@ class DBRepo:
                     measurement_id INTEGER PRIMARY KEY AUTOINCREMENT,
                     timestamp INTEGER DEFAULT (strftime('%s','now')),
                     user_id VARCHAR(64),
-                    hrt_type VARCHAR,
+                    hrt_type VARCHAR(100),
                     hrt_dose_mg REAL,
                     weight_kg REAL,
                     height_cm REAL,
