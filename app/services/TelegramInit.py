@@ -312,7 +312,9 @@ class ActionManager:
             await self.load_screen(update, context, screen='admin')
             return
         
-        if data[-1] == 'updateScreenConfig':
+        if data[-1] == 'backupAll':
+            self.backuper.push_all()
+        elif data[-1] == 'updateScreenConfig':
             self.fetcher.fetch_all()
             with open("Data/config/screens.json", 'r') as f:
                 self.screen_config = json.load(f)
@@ -769,10 +771,17 @@ class HandlerManager:
         self.image_input_funcs = {
             'measurementSeq':'measurementSeqSetImage'
             }
+        
+    def whitelist_filter(self, update):
+        return update.effective_user.id in self.config['whitelist']
 
     async def button_handler(self, update: Update, context: CallbackContext):
         query = update.callback_query
         await query.answer()  # Acknowledge button press
+
+        if not self.whitelist_filter(update=update):
+            await self.action.load_screen(update=update, context=context, screen='blacklisted')
+            return
 
         data = query.data
 
@@ -785,6 +794,10 @@ class HandlerManager:
 
 
     async def text_message_handler(self, update: Update, context: CallbackContext):
+        if not self.whitelist_filter(update=update):
+            await self.action.load_screen(update=update, context=context, screen='blacklisted')
+            return
+        
         current_screen = context.user_data.get('current_screen').split('_')[0]
         if not current_screen:
             return
@@ -796,6 +809,10 @@ class HandlerManager:
 
 
     async def voice_message_handler(self, update: Update, context: CallbackContext):
+        if not self.whitelist_filter(update=update):
+            await self.action.load_screen(update=update, context=context, screen='blacklisted')
+            return
+        
         current_screen = context.user_data.get('current_screen').split('_')[0]
         if not current_screen:
             return
@@ -804,6 +821,10 @@ class HandlerManager:
 
 
     async def image_message_handler(self, update: Update, context: CallbackContext):
+        if not self.whitelist_filter(update=update):
+            await self.action.load_screen(update=update, context=context, screen='blacklisted')
+            return
+        
         current_screen = context.user_data.get('current_screen').split('_')[0]
         if not current_screen:
             return
@@ -811,9 +832,17 @@ class HandlerManager:
             await self.action.call_action(update=update, context=context, action=self.image_input_funcs[current_screen])
 
     async def start(self, update, context):
+        if not self.whitelist_filter(update=update):
+            await self.action.load_screen(update=update, context=context, screen='blacklisted')
+            return
+        
         await self.action.load_screen(update=update, context=context, screen='start')
 
     async def settings(self, update, context):
+        if not self.whitelist_filter(update=update):
+            await self.action.load_screen(update=update, context=context, screen='blacklisted')
+            return
+        
         user_id = update.effective_user.id
         if user_id == self.config["admin_id"]:
             logging.info(f"Admin [{user_id}] in control panel...")
