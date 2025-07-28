@@ -11,12 +11,13 @@ from pydub import AudioSegment
 from datetime import datetime
 import json
 import time
-from repos.GoogleDriveRepo import GoogleDriveRepo
+from repos.BackblazeRepo import BackblazeRepo
 from repos.DBRepo import DBRepo
 import logging
 from services.DownloaderService import DownloaderService
 from services.FetchService import FetchService
 import asyncio
+import random as rnd
 
 
 # Example: increase read timeout to 60 seconds
@@ -119,14 +120,13 @@ class ScreenManager:
 class ActionManager:
     def __init__(self) -> None:
         self.database = DBRepo()
-        self.google_drive = GoogleDriveRepo()
+        self.drive_repo = BackblazeRepo()
         self.screen_manager = ScreenManager()
         self.downloader = DownloaderService()
         self.backuper = BackupService(log=logging)
         self.fetcher = FetchService()
 
-        self.image_folder = os.getenv('IMAGE_FOLDER')
-        self.vocals_folder = os.getenv('VOCALS_FOLDER')
+        self.files_folder = os.getenv('FILES_FOLDER')
 
         self.max_zip_size = 200*1024*1024
 
@@ -496,7 +496,7 @@ Current Interval: *{value_to_display}*
             user_id = update.effective_user.id
             file_ids = self.database.get_measurement_values(user_id, col_name_list=['voiceFragment_url', 'photoBody_url', 'photoFace_url'])
             for id in file_ids:
-                self.google_drive.delete_file(id)
+                self.drive_repo.delete_file(f"{self.files_folder}/{id}")
 
             self.database.delete_user_data(user_id)
             text, image_url, buttons, callbacks = self.get_screen_data('deleteUserDataSuccess')
@@ -533,6 +533,7 @@ Latest Measurement: {last_measurement}
                 return
         
         user_id = update.effective_user.id
+        self.database.save_measurement(user_id)
         col_name = self.measurement_to_unit_names[current_screen[-1]]
         col_name_splitted = col_name.split('_')
         unit = '' if len(col_name_splitted) < 2 or col_name_splitted[-1]=='url' else ' '+col_name_splitted[-1]
@@ -636,11 +637,11 @@ Latest Measurement: {last_measurement}
         mp3_bytes.seek(0)
 
         # Upload to Google Drive
-        filename = f"{current_screen}_{str(int(time.time()))}"
-        url = self.google_drive.upload_file_from_bytes(
+        filename = f"{current_screen}_{str(int(time.time()))}_{rnd.randint(0, 1e5-1):05}"
+        self.drive_repo.upload_file_from_bytes(
             file_bytes=mp3_bytes,
             filename=filename,
-            folder_id=self.vocals_folder,
+            folder_path=self.files_folder,
             encode=True
         )
 
@@ -651,9 +652,9 @@ Latest Measurement: {last_measurement}
         if last_measurement:
             last_url = last_measurement.get(col_name)
             if last_url:
-                self.google_drive.delete_file(last_url)
+                self.drive_repo.delete_file(f"{self.files_folder}/{last_url}")
 
-        self.database.save_measurement(user_id, **{col_name: url})
+        self.database.save_measurement(user_id, **{col_name: filename})
         await self.measurementSeq(update, context)
 
     async def measurementSeqSetImage(self, update: Update, context: CallbackContext):
@@ -681,11 +682,11 @@ Latest Measurement: {last_measurement}
 
         image_bytes.seek(0)
 
-        filename = f"{current_screen}_{str(int(time.time()))}"
-        url = self.google_drive.upload_file_from_bytes(
+        filename = f"{current_screen}_{str(int(time.time()))}_{rnd.randint(0, 1e5-1):05}"
+        self.drive_repo.upload_file_from_bytes(
             file_bytes=image_bytes,
             filename=filename,
-            folder_id=self.image_folder,
+            folder_path=self.files_folder,
             encode=True
         )
 
@@ -696,9 +697,9 @@ Latest Measurement: {last_measurement}
         if last_measurement:
             last_url = last_measurement[col_name]
             if last_url:
-                self.google_drive.delete_file(last_url)
+                self.drive_repo.delete_file(f"{self.images_folder}/{last_url}")
                 
-        self.database.save_measurement(user_id, **{col_name: url})
+        self.database.save_measurement(user_id, **{col_name: filename})
         await self.measurementSeq(update, context)
 
     async def downloadImages(self, update: Update, context: CallbackContext):

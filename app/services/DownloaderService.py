@@ -1,29 +1,31 @@
 import tempfile
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from repos.GoogleDriveRepo import GoogleDriveRepo
+from repos.BackblazeRepo import BackblazeRepo
 import os
 import pandas as pd
 import io
-
 import traceback
 
 
 class DownloaderService:
     def __init__(self):
         """
-        Takes a GoogleDriveRepo instance.
+        Takes a BackblazeRepo instance.
         """
-        self.drive_repo = GoogleDriveRepo()
+        self.drive_repo = BackblazeRepo()
         self.temp_folder = 'Data/temp'
+        os.makedirs(self.temp_folder, exist_ok=True)  # Ensure temp folder exists
+        self.files_folder = os.getenv('FILES_FOLDER')
+        if not self.files_folder:
+            raise ValueError("FILES_FOLDER environment variable not set")
 
     def download_file(self, file_id: str, decode: bool = False) -> tuple[bytes, str]:
         """
         Downloads one file and returns (bytes, filename).
         """
-        file_bytes = self.drive_repo.download_file_to_bytes(file_id, decode=decode)
-        file_name = self.drive_repo.get_filename(file_id)
-        return file_bytes, file_name
+        file_bytes = self.drive_repo.download_file_to_bytes(f"{self.files_folder}/{file_id}", decode=decode)
+        return file_bytes, file_id
 
     def download_files_as_zip(
         self,
@@ -31,22 +33,23 @@ class DownloaderService:
         file_ids: list[str],
         decode: bool = False,
         file_extension: str = "",
-        max_zip_size: int = 50 * 1024 * 1024  # 50 MB by default
-    ) -> bytes:
+        max_zip_size: int = 200 * 1024 * 1024  # 200 MB by default
+    ) -> bytes | str:
         """
         Downloads multiple files in parallel (max 10), zips them on disk, returns zip bytes.
         Adds an extension to all files. Stops adding if max size is exceeded.
+        Returns zip bytes or traceback string on error.
         """
+
         def worker(file_id):
-            return self.download_file(file_id, decode=decode)
+            file_bytes = self.drive_repo.download_file_to_bytes(f"{self.files_folder}/{file_id}", decode=decode)
+            return file_bytes, file_id
 
-        tmp_zip_path = f"{self.temp_folder}/{zip_name}"
+        tmp_zip_path = os.path.join(self.temp_folder, zip_name)
         total_size = 0
-
         zip_bytes = None
 
         try:
-
             with zipfile.ZipFile(tmp_zip_path, 'w', compression=zipfile.ZIP_DEFLATED) as zipf:
                 with ThreadPoolExecutor(max_workers=10) as executor:
                     futures = [executor.submit(worker, fid) for fid in file_ids]
@@ -71,16 +74,20 @@ class DownloaderService:
             with open(tmp_zip_path, 'rb') as f:
                 zip_bytes = f.read()
 
-        except Exception as e:
-            tb_str = traceback.format_exc()  # <-- full traceback as string
+        except Exception:
+            tb_str = traceback.format_exc()
             print(tb_str)
-            return tb_str  # <-- return if you want the caller to see it
+            return tb_str
 
         finally:
-            # Clean up
-            os.remove(tmp_zip_path)
+            # Clean up temp zip file if it exists
+            if os.path.exists(tmp_zip_path):
+                try:
+                    os.remove(tmp_zip_path)
+                except Exception as e:
+                    print(f"Failed to remove temp zip file: {e}")
 
-            return zip_bytes
+        return zip_bytes
 
     def dataframe_to_zip_bytes(self, df: pd.DataFrame, csv_filename="data.csv", zip_filename="data.zip") -> bytes:
         # Create a bytes buffer for the zip file

@@ -1,4 +1,4 @@
-from repos.GoogleDriveRepo import GoogleDriveRepo
+from repos.BackblazeRepo import BackblazeRepo
 import time
 import os
 import io
@@ -7,30 +7,30 @@ class BackupService:
     def __init__(self, log, interval=0):
         self.log = log
         self.interval = interval
-        self.drive_repo = GoogleDriveRepo()
+        self.drive_repo = BackblazeRepo()
 
+        # Environment variables must match Backblaze folder prefixes
         self.db_folder = os.getenv('DB_FOLDER')
-        self.config_folder = os.getenv('CONFIG_FOLDER')
         self.log_folder = os.getenv('LOG_FOLDER')
 
-
-    def push_folder(self, local_folder_path: str, folder_id: str, current_time: float):
+    def push_folder(self, local_folder_path: str, b2_folder_path: str):
         files_to_push = os.listdir(local_folder_path)
-        files_to_delete = self.drive_repo.get_files_in_folder(folder_id)
 
         for file in files_to_push:
-            if file in ['.gitkeep', 'credentials.json', 'token.json']:
+            if file in ['.gitkeep', '.bzEmpty']:
                 continue
-            file_path = f"{local_folder_path}/{file}"
+
+            file_path = os.path.join(local_folder_path, file)
 
             with open(file_path, 'rb') as f:
                 data = f.read()
 
             self.log.info(f"Starting to push: {file} [{len(data)/1e6:.2f} MB]")
-            self.drive_repo.upload_file_from_bytes(file_bytes=io.BytesIO(data), filename=file, folder_id=folder_id)
-            if file in files_to_delete:
-                self.drive_repo.delete_file(files_to_delete[file])
-
+            self.drive_repo.upload_file_from_bytes(
+                file_bytes=io.BytesIO(data),
+                filename=file,
+                folder_path=b2_folder_path
+            )
 
     def push_all(self):
         folders_to_setup = [
@@ -38,18 +38,16 @@ class BackupService:
             (self.log_folder, "Data/logs/")
         ]
 
-
         self.log.info("Backup in progress...")
         start_timestamp = time.time()
-        for folder in folders_to_setup:
-            self.push_folder(local_folder_path=folder[1], folder_id=folder[0], current_time=start_timestamp)
 
-        self.log.info(f"Backup is finished in {time.time()-start_timestamp:.4f} secconds!")
+        for b2_path, local_path in folders_to_setup:
+            self.push_folder(local_folder_path=local_path, b2_folder_path=b2_path)
+
+        self.log.info(f"Backup is finished in {time.time()-start_timestamp:.4f} seconds!")
 
     def run(self):
         if self.interval > 0:
             while True:
-                time.sleep(self.interval)
                 self.push_all()
-
-        
+                time.sleep(self.interval)

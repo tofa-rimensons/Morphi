@@ -27,15 +27,22 @@ class Main:
         with open('Data/config/config.json', 'r') as f:
             interval = json.load(f)['backup_interval']
 
-        backup_service = BackupService(logging, interval)
-        backup_service.run()
+        while True:
+            try:
+                backup_service = BackupService(logging, interval)
+                backup_service.run()
+            except Exception as e:
+                logging.error(f"Error in backuper: {e}")
 
     @staticmethod
     def startup_morphi():
         Main.setup_logging()
 
-        telegram_initializer = BotManager()
-        telegram_initializer.run()
+        try:
+            telegram_initializer = BotManager()
+            telegram_initializer.run()
+        except Exception as e:
+            logging.error(f"Error in Morphi: {e}")
 
 
 
